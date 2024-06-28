@@ -2,3 +2,9 @@
 .vs
 out
 CMakeSettings.json
+.polysope
+armadillo.obj
+.tar.gz
+.py
+.csv
+h5View.obj
