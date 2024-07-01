@@ -8,3 +8,8 @@ armadillo.obj
 .py
 .csv
 h5View.obj
+/LBSerrorsVal.csv
+/PODerrorsVal.csv
+/SPLOCSerrorsVal.csv
+/eigen-3.2.10.tar.gz
+/LICENSE.md
