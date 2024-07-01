@@ -4,7 +4,7 @@ This repository hosts projective dynamics implementations that are used to serve
 - In the old original code by C. Brandt, linear-blend reduction subspaces can be computed.
 - Current code can read any provided position reduction bases and apply them to simulations.
 
-  Developed by:
+Developed by:
 - [Shaimaa Monem](https://orcid.org/0009-0008-4038-3452)
 - [Max Planck Institute for Dynamics of Complex Technical Systems](https://www.mpi-magdeburg.mpg.de/2316/en), Magdeburg, Germany.
 
