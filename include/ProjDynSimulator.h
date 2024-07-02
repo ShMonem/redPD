@@ -70,6 +70,12 @@ SOFTWARE.
 // If using parallel blocks for updating vertex positions, this defines the size of those
 #define PROJ_DYN_VPOS_BLOCK_SIZE 1000
 
+// Setting results storage macros
+// If storing frames in .png format (e.g. for numerical stability comparision)
+#define STORE_FRAMES_PNG true
+// If storing frames in .off format (e.g. for FOM snapshots collection, or error computation between different reduction methods)
+#define STORE_FRAMES_OFF true
+
 
 namespace PD {
 
@@ -179,6 +185,9 @@ namespace PD {
 		int m_frameCount;
 		
 		void addRandomFloor(PDScalar a, PDScalar b, PDScalar c, PDScalar d, PDScalar floorCollisionWeight);
+
+		std::string m_meshName = "";
+		std::string m_meshSnapshotsDirectory = "";
 
 	private:
 		PDScalar m_initPosNorm;
@@ -326,7 +335,11 @@ namespace PD {
 		bool m_usingSkinSubspaces;
 		
 		bool m_usingPosSubspaces;   // if we do reduction for position (use subspaces for positions)
+
+		
+		
 		// POD stuff----------------
+		
 		PDSparseMatrix m_massMatrixInv;
 		bool m_usingPODPosSubspaces;
 		int m_numPosPODModes;

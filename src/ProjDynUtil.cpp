@@ -295,6 +295,15 @@ namespace PD {
 		return out;
 	}
 
+	std::string getMeshName(std::string& meshURL)
+	{
+		std::size_t out = meshURL.find_last_of(".");
+		std::string name = meshURL.substr(0, out);
+
+		return name;
+	}
+
+
 	void fillSamplesRandomly(std::vector<unsigned int>& samples, unsigned int numSamples, unsigned int max)
 	{
 		if (numSamples <= samples.size()) return;

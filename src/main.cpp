@@ -105,6 +105,7 @@ public:
 	PDPositions m_gripPos;
 	PDTriangles &m_faces;
 	std::string m_url;
+	std::string m_frames_directory;
 	StopWatch m_simTimer;
 	std::vector<unsigned int> m_gripVerts;
 	bool m_isGripping = false;
@@ -114,13 +115,15 @@ public:
 	int m_numVertices;
 	int numberOfFrame = 0;
 
-	SimViewer(PDPositions &verts, PDTriangles &faces, PDPositions &velos, std::string url, int numIterations) : m_verts(verts),
+	SimViewer(PDPositions &verts, PDTriangles &faces, PDPositions &velos, std::string url, int numIterations, std::string frames_directory) :
+		                                                                                                        m_verts(verts),
 																												m_faces(faces),
 																												m_velos(velos),
 																												m_simTimer(10000, 100000),
 																												m_url(url),
 																												m_isGripping(false),
-																												m_toggleStiff(false)
+																												m_toggleStiff(false),
+		                                                                                                        m_frames_directory(frames_directory)
 	{
 		m_sim = initSimulator(m_verts, m_faces, m_velos, m_url);
 		m_numIterations = numIterations;
@@ -170,18 +173,17 @@ public:
 			m_simTimer.stopStopWatch();
 			viewer->data().set_mesh(m_sim->getPositions().block(0, 0, m_numVertices, 3), m_faces);
 
-			// Uncomment if you want to store frames as .png
-			// to create amnimations for presentations later and compare between methods
-			/*
+			
+		if(STORE_FRAMES_PNG){
+	
 			Eigen::Matrix<unsigned char, Eigen::Dynamic, Eigen::Dynamic> R(1280, 800);
 			Eigen::Matrix<unsigned char, Eigen::Dynamic, Eigen::Dynamic> G(1280, 800);
 			Eigen::Matrix<unsigned char, Eigen::Dynamic, Eigen::Dynamic> B(1280, 800);
 			Eigen::Matrix<unsigned char, Eigen::Dynamic, Eigen::Dynamic> A(1280, 800);
 
-			viewer->core().draw_buffer(
-				viewer->data(), false, R, G, B, A);
-			igl::png::writePNG(R, G, B, A, "/home/shaimaa/libigl/tutorial/doubleHRPD/meshFrameFullSimPNG/onlyPosLBS200/out" + std::to_string(numberOfFrame) + ".png"); */
-
+			viewer->core().draw_buffer(viewer->data(), false, R, G, B, A);
+			igl::png::writePNG(R, G, B, A, m_frames_directory +"out" + std::to_string(numberOfFrame) + ".png");
+			}
 			numberOfFrame++;
 
 			return false;
@@ -296,7 +298,33 @@ int main()
 	// Depending on whatever your default working directory is and wherever this mesh
 	// file is, you will need to change this URL
 	std::string meshURL = "bunny.obj";
-	// std::string meshURL = "h5View.obj";
+	std::string meshName(PD::getMeshName(meshURL));
+	// create the directory to store frames as .png
+	// note: photoes are stored only if STORE_FRAMES_PNG is sat to true.
+
+	std::string m_png_frames_directory = "../../../results/";
+	if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+	{
+		m_png_frames_directory = m_png_frames_directory + "png/";
+		if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+		{
+			m_png_frames_directory = m_png_frames_directory + meshName;
+			if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+			{
+				if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					// change "/FOM/" to the name of your experiment if desired!
+					m_png_frames_directory = m_png_frames_directory + "/FOM/";
+					if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+					{
+						std::cout << "PNG directory created!: " << m_png_frames_directory << std::endl;
+					}
+				}
+			}
+		}
+	}
+
+
 	//  Load a mesh using IGL
 	PD::PDPositions velos;
 	// readOBJ does not accept this type in libigl 2.3.0, we use Eigen MatrixXd and MatrixXi then convert them later (see below the reat)
@@ -326,7 +354,7 @@ int main()
 		// Start a viewer that uses a simple plugin to draw the simulated mesh
 		// (it does numIterations local/global steps to simulate the next timestep
 		// before drawing the mesh).
-		SimViewer simViewer(verts, faces, velos, meshURL, numIterations);
+		SimViewer simViewer(verts, faces, velos, meshURL, numIterations, m_png_frames_directory);
 
 		// Eigen::MatrixXd verts3 = Eigen::MatrixXd(verts);
 		// Eigen::MatrixXi faces3 = Eigen::MatrixXi(faces);

@@ -136,6 +136,8 @@ namespace PD {
 	
 	bool save_photo(igl::opengl::glfw::Viewer& viewer, unsigned char key, int modifier);
 
+	std::string getMeshName(std::string& meshURL);
+
 	
 
 }

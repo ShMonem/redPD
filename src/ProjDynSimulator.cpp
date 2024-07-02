@@ -48,11 +48,11 @@ using namespace PD;
 
 ProjDynSimulator::ProjDynSimulator
 (PDTriangles& triangles, PDPositions& initialPositions, PDPositions& initialVelocities,
-	PDScalar timeStep, 
+	PDScalar timeStep,
 	int m_numPosPODModes,
 	int m_numQDEIMComponents,
-	
-	int numSamplesPosSubspace, 
+
+	int numSamplesPosSubspace,
 	PDScalar baseFunctionRadius,
 	int interpolBaseSize,
 	PDScalar rhsInterpolWeightRadius,
@@ -76,6 +76,7 @@ ProjDynSimulator::ProjDynSimulator
 	m_numConstraintSamples(numConstraintSamples),
 
 	m_meshURL(meshURL),
+	m_meshName(PD::getMeshName(meshURL)),
 
 	m_numTets(0),
 	m_hasTetrahedrons(false),
@@ -265,6 +266,21 @@ ProjDynSimulator::ProjDynSimulator
 	Eigen::initParallel();
 #endif
 
+	// create directories to store position snapshots
+	// note snapshots are stored only if STORE_FRAMES_OFF is sat true
+	m_meshSnapshotsDirectory = "../../../results/";
+	if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+	{
+		m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "position_snapshots/";
+		if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+		{
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + m_meshName + "/";
+			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+			{
+				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+			}
+		}
+	}
 }
 
 void ProjDynSimulator::finalizeBaseFunctions() {
@@ -2375,6 +2391,13 @@ void ProjDynSimulator::setup() {
 			
 		if (m_usingSkinSubspaces && !m_usingPODPosSubspaces) {    /// Here we have Skinning positionSubspace reduction and rhdInterpolation
 			m_subspaceLHS_inner.setZero(m_baseFunctions.cols(), m_baseFunctions.cols());
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_pos_and_constraint/";
+
+			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+			{
+				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+			}
+
 			std::cout << "Simulation case: Skinning subspaces for positions and LS Fitting for constraint projection" << std::endl;
 			
 			// Projection terms for each snapshot group
@@ -2412,6 +2435,11 @@ void ProjDynSimulator::setup() {
 			m_subspaceYLHS_inner.setZero(m_baseXFunctions.cols(), m_baseXFunctions.cols());
 			m_subspaceZLHS_inner.setZero(m_baseXFunctions.cols(), m_baseXFunctions.cols());
 			
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_LBS_constraint/";
+			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+			{
+				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+			}
 			std::cout << "Simulation case: POD subspaces for positions and LS Fitting for constraint projection" << std::endl;
 			
 			PDSparseMatrix conMat(m_lhsMatrix.rows(), m_lhsMatrix.cols());
@@ -2479,13 +2507,16 @@ void ProjDynSimulator::setup() {
 			std::cout << "Warning: Factorization denseSolver X/Y/Z of LHS matrix for global system was not successful!.." << std::endl;
 			}
 			std::cout << "Factorization denseSolver X/Y/Z of LHS matrix for global system was successful!.." << std::endl;
-			//m_subspaceXLHS_inner = m_subspaceLHS_inner.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);		
-			//std::cout << "Simulation case: POD subspaces for positions and LS Fitting for constraint projection is NOT yet possible!" << std::endl;
-			
+			//m_subspaceXLHS_inner = m_subspaceLHS_inner.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);					
 
 		}
 		else if (!m_usingPosSubspaces){  // m_rhsInterpolation but no position space reduction
 
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_constraint/";
+			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+			{
+				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+			}
 			std::cout << "Simulation case: No subspace reducgion for positions and LS Fitting for constraint projection" << std::endl;
 			
 			PDSparseMatrix conMat(m_lhsMatrix.rows(), m_lhsMatrix.cols());
@@ -2554,7 +2585,12 @@ void ProjDynSimulator::setup() {
 		conMat.setFromTriplets(entries.begin(), entries.end());
 		
 		if (m_usingSkinSubspaces&& !m_usingPODPosSubspaces) { // Slow case: using position subspaces but no rhs interpolation
-						
+			
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_pos/";
+			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+			{
+				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+			}
 			std::cout << "Simulation case: Skinning subspace for positions and no reduction for constraint projection. VERY SLOW " << std::endl;
 			// (numeriacally unstable) REQUIRES EXTREMELY SMALL TIME STEP for reasonable visual simulations and becomes even SLOWWWWWWER!!" 
 			
@@ -2572,14 +2608,25 @@ void ProjDynSimulator::setup() {
 			
 			if(m_usingQDEIMComponents){
 				if(m_solveDeimLS){
+					m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_LSDEIM_constraint/";
+					
 					std::cout << "Simulation case: POD subspace for positions and DEIM/QDEIM for constraint projection, using Least square" << std::endl;
 				}
 				else{
+					m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_DEIM_constraint/";
 					std::cout << "Simulation case: POD subspace for positions and DEIM/QDEIM for constraint projection" << std::endl;
 				}
 			}
-			else std::cout << "Simulation case: POD subspace for positions and no reduction for constraint projection" << std::endl;
-			
+			else
+			{
+				std::cout << "Simulation case: POD subspace for positions and no reduction for constraint projection" << std::endl;
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_only_pos/";
+			}
+			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+			{
+				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+			}
+
 			m_subspaceXLHS_inner.setZero(m_baseXFunctions.cols(), m_baseXFunctions.cols());
 			m_subspaceYLHS_inner.setZero(m_baseYFunctions.cols(), m_baseYFunctions.cols());
 			m_subspaceZLHS_inner.setZero(m_baseZFunctions.cols(), m_baseZFunctions.cols());
@@ -2647,6 +2694,11 @@ void ProjDynSimulator::setup() {
 			}	
 		}
 		else { // Full simulation: here neither position space nor constraint projection reduction ===> no reduction at all!!
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "FOM/";
+			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+			{
+				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+			}
 			std::cout << "Simulation case: No REDUCTION: we run FullSpace positions and FullSpace constraint projection" << std::endl;
 
 			m_lhsMatrix += conMat;
@@ -3975,6 +4027,10 @@ void ProjDynSimulator::step(int numIterations)
 	}
 	m_positions = tempPos/(0.01*tempPos.norm());	 
 	*/
+	if (STORE_FRAMES_OFF)
+	{
+		igl::writeOFF(m_meshSnapshotsDirectory + "pos_" + std::to_string(m_frameCount) + ".off", m_positions, m_triangles);
+	}
 }
 
 /*

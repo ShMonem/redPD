@@ -12,7 +12,7 @@ igl_include(png)
 
 # Edit files to build here.
 set(SRCS 
-  src/doubleHRPD.cpp
+  src/main.cpp
   src/glad.c
   src/predicates.cxx
   src/ProjDynConstraints.cpp
