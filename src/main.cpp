@@ -41,27 +41,27 @@ SOFTWARE.
 
 /* Constructs a simulator object, sets constraints, adds gravity, a floor with friction and
 triggers the precomputation. */
-ProjDynSimulator *initSimulator(PD::PDPositions verts, PD::PDTriangles faces, PD::PDPositions velos, std::string meshURL)
+ProjDynSimulator *initSimulator(PD::PDPositions verts, PD::PDTriangles faces, PD::PDPositions velos, std::string meshURL,
+								double timeStep,
+								int numberPositionPCAModes, std::string pca_basesDir,
+								int numberNonlinearSPLOCSModes, std::string splocs_basesDir,
+								int numberSamplesForVertexPosSubspace,
+
+								double radiusMultiplierForVertexPosSubspace,
+								int dimensionOfConstraintProjectionsSubspace,
+								double radiusMultiplierForConstraintProjectionsSubspace,
+								int numberSampledConstraints,
+								double massPerUnitArea,
+								double dampingAlpha,
+								bool makeTets,
+								double rhsRegularizationWeight,
+								double yTranslation)
 {
-	// Construct simulator object from this mesh and provide initial velcocities,
-	// as well as a few reduction and simulation parameters, which are explained
-	// in the _README.txt
-	double timeStep = 10;
-
-	int numberPositionPODModes = 0;				 // 200 how many modes will be selected for the POD basis for positio subspace construction
-	int numberNonlinearQDEIMModes = 0;			 // QDEIM components
-	int numberSamplesForVertexPosSubspace = 0; // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
-
-	double radiusMultiplierForVertexPosSubspace = 1.1; // The larger this number, the larger the support of the base functions.
-	int dimensionOfConstraintProjectionsSubspace = 0;  // 120; // The constraint projections subspace will be constructed to be twice that size and then condensed via an SVD
-	double radiusMultiplierForConstraintProjectionsSubspace = 2.2;
-	int numberSampledConstraints = 0; // 1000; // Number of constraints that will be evaluated each iteration
-									  //  this number needs to be zero in order to do no reduction for constraint projection
 
 	// allocate memory for a simulator object
 	ProjDynSimulator *sim =
 		new ProjDynSimulator(faces, verts, velos, timeStep, 
-							 numberPositionPODModes, numberNonlinearQDEIMModes,
+							 numberPositionPCAModes, pca_basesDir, numberNonlinearSPLOCSModes, splocs_basesDir,
 							 numberSamplesForVertexPosSubspace, radiusMultiplierForVertexPosSubspace,
 							 dimensionOfConstraintProjectionsSubspace, radiusMultiplierForConstraintProjectionsSubspace,
 							 numberSampledConstraints,
@@ -105,7 +105,8 @@ public:
 	PDPositions m_gripPos;
 	PDTriangles &m_faces;
 	std::string m_url;
-	std::string m_frames_directory;
+	std::string m_png_frames_directory;
+	
 	StopWatch m_simTimer;
 	std::vector<unsigned int> m_gripVerts;
 	bool m_isGripping = false;
@@ -114,18 +115,75 @@ public:
 	int m_numIterations;
 	int m_numVertices;
 	int numberOfFrame = 0;
+	double m_timeStep;
+	int m_numberPositionPCAModes;
+	std::string m_pca_basesDir;
+	int m_numberPositionSPLOCSModes;
+	std::string m_splocs_basesDir;
+	int m_numberSamplesForLBSVertexPosSubspace;
+	double m_radiusMultiplierForVertexPosSubspace;
+	int m_dimensionOfConstraintProjectionsSubspace;
+	double m_radiusMultiplierForConstraintProjectionsSubspace;
+	int m_numberSampledConstraints;
+	double m_massPerUnitArea;
+	double m_dampingAlpha;
+	bool m_makeTets;
+	double m_rhsRegularizationWeight;
+	double m_yTranslation;
 
-	SimViewer(PDPositions &verts, PDTriangles &faces, PDPositions &velos, std::string url, int numIterations, std::string frames_directory) :
-		                                                                                                        m_verts(verts),
-																												m_faces(faces),
-																												m_velos(velos),
-																												m_simTimer(10000, 100000),
-																												m_url(url),
-																												m_isGripping(false),
-																												m_toggleStiff(false),
-		                                                                                                        m_frames_directory(frames_directory)
+	SimViewer(PDPositions& verts, PDTriangles& faces, PDPositions& velos,
+		std::string url, std::string frames_directory,
+		int numIterations, double timeStep,
+		int numberPositionPCAModes, std::string pca_directory,
+		int numberPositionSPLOCSModes, std::string splocs_basesDir,
+		int numberSamplesForVertexPosSubspace,
+		double radiusMultiplierForVertexPosSubspace,
+		int dimensionOfConstraintProjectionsSubspace,
+		double radiusMultiplierForConstraintProjectionsSubspace,
+		int numberSampledConstraints,
+		double massPerUnitArea,
+		double dampingAlpha,
+		bool makeTets,
+		double rhsRegularizationWeight,
+		double yTranslation) :
+		m_verts(verts),
+		m_faces(faces),
+		m_velos(velos),
+		m_simTimer(10000, 100000),
+		m_url(url),
+		m_isGripping(false),
+		m_toggleStiff(false),
+		m_png_frames_directory(frames_directory),
+		m_pca_basesDir(pca_directory),
+		m_splocs_basesDir(splocs_basesDir),
+		m_timeStep(timeStep),
+		m_numberPositionPCAModes(numberPositionPCAModes),
+		m_numberPositionSPLOCSModes(numberPositionSPLOCSModes),
+		m_numberSamplesForLBSVertexPosSubspace(numberSamplesForVertexPosSubspace),
+		m_radiusMultiplierForVertexPosSubspace(radiusMultiplierForVertexPosSubspace),
+		m_dimensionOfConstraintProjectionsSubspace(dimensionOfConstraintProjectionsSubspace),
+		m_radiusMultiplierForConstraintProjectionsSubspace(radiusMultiplierForConstraintProjectionsSubspace),
+		m_numberSampledConstraints(numberSampledConstraints),
+		m_massPerUnitArea(massPerUnitArea),
+		m_dampingAlpha(dampingAlpha),
+		m_makeTets(makeTets),
+		m_rhsRegularizationWeight(rhsRegularizationWeight),
+		m_yTranslation(yTranslation)
+
 	{
-		m_sim = initSimulator(m_verts, m_faces, m_velos, m_url);
+		m_sim = initSimulator(m_verts, m_faces, m_velos, m_url, m_timeStep,
+			m_numberPositionPCAModes, m_pca_basesDir,
+			m_numberPositionSPLOCSModes, m_splocs_basesDir,
+			m_numberSamplesForLBSVertexPosSubspace,
+			m_radiusMultiplierForVertexPosSubspace,
+			m_dimensionOfConstraintProjectionsSubspace,
+			m_radiusMultiplierForConstraintProjectionsSubspace,
+			m_numberSampledConstraints,
+			m_massPerUnitArea,
+			m_dampingAlpha,
+			m_makeTets,
+			m_rhsRegularizationWeight,
+			m_yTranslation);
 		m_numIterations = numIterations;
 		m_numVertices = m_verts.rows();
 
@@ -182,7 +240,7 @@ public:
 			Eigen::Matrix<unsigned char, Eigen::Dynamic, Eigen::Dynamic> A(1280, 800);
 
 			viewer->core().draw_buffer(viewer->data(), false, R, G, B, A);
-			igl::png::writePNG(R, G, B, A, m_frames_directory +"out" + std::to_string(numberOfFrame) + ".png");
+			igl::png::writePNG(R, G, B, A, m_png_frames_directory +"out" + std::to_string(numberOfFrame) + ".png");
 			}
 			numberOfFrame++;
 
@@ -277,7 +335,19 @@ public:
 			if (m_sim)
 			{
 				delete m_sim;
-				m_sim = initSimulator(m_verts, m_faces, m_velos, m_url);
+				m_sim = initSimulator(m_verts, m_faces, m_velos, m_url, m_timeStep,
+					m_numberPositionPCAModes, m_pca_basesDir,
+					m_numberPositionSPLOCSModes, m_splocs_basesDir,
+					m_numberSamplesForLBSVertexPosSubspace,
+					m_radiusMultiplierForVertexPosSubspace,
+					m_dimensionOfConstraintProjectionsSubspace,
+					m_radiusMultiplierForConstraintProjectionsSubspace,
+					m_numberSampledConstraints,
+					m_massPerUnitArea,
+					m_dampingAlpha,
+					m_makeTets,
+					m_rhsRegularizationWeight,
+					m_yTranslation);
 			}
 			m_isGripping = false;
 			m_toggleStiff = false;
@@ -323,7 +393,17 @@ int main()
 			}
 		}
 	}
+	else
+	{
+		std::cout << "Warning: PNG directory already exists, you might be over-writing!: " << m_png_frames_directory << std::endl;
+	}
 
+	// Directories where bases are stored
+	std::string pca_basesDir = "../../../bases/" + meshName + "/q_bases/PCA" + PCA_POSITION_ALIGNMENT  + PCA_POSITION_WEIGHTING +
+								PCA_POSITION_SUPPORT + PCA_POSITION_ORTHOGONAL + "_Release/200outOf200_Frames_/1_increment_200" + PCA_POSITION_ALIGNMENT + "_bases/using_F_200";
+	std::string splocs_basesDir = "../../../bases/" + meshName + "/q_bases/SPLOCS" + SPLOCS_POSITION_ALIGNMENT + SPLOCS_POSITION_WEIGHTING +
+		SPLOCS_POSITION_SUPPORT + SPLOCS_POSITION_ORTHOGONAL + "_Release/200outOf200_Frames_/1_increment_200" + SPLOCS_POSITION_ALIGNMENT + "_bases/using_F_200";
+	std::string deim_basesDir;
 
 	//  Load a mesh using IGL
 	PD::PDPositions velos;
@@ -348,13 +428,57 @@ int main()
 		int numVertices = verts.rows();
 		velos.setZero(numVertices, 3);
 
-		// Number of local/global iterations in the reduced projective dynamics solver
-		int numIterations = 10;
+		/* patameters are passed to the simulator object from this mesh and provide initial velocities,
+		   as well as a few reduction and simulation parameters, which are explained
+		   in the README.txt */
+		
+		// Solver parameters
+		int numIterations = 10;                        // Number of local/global iterations in the reduced projective dynamics solver
+		double timeStep = 10;
+
+		// PCA reduction-methods parameters
+		//
+		// 1. For position subspaces, use only one methods of the following:
+		int numberPositionPCAModes = 100;				            // number of PCA bases/modes for position subspace construction (0. means the method is off)
+		int numberPositionSPLOCSModes = 0;				        // number of SPLOCS bases/modes for position subspace construction (0. means the method is off)
+
+		// TODO: 2. For constaints reduction 
+		int numberNonlinearDEIMModes = 0;			            // DEIM components
+
+		// LBS reduction parameters
+		// 
+		// 1. For position subspace
+		int numberSamplesForVertexPosSubspace = 0;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
+		double radiusMultiplierForVertexPosSubspace = 1.1;      // The larger this number, the larger the support of the base functions.
+		
+		// 2. For constraints subspace
+		int dimensionOfConstraintProjectionsSubspace = 0;       // 120; // The constraint projections subspace will be constructed to be twice that size and then condensed via an SVD
+		double radiusMultiplierForConstraintProjectionsSubspace = 2.2;     
+		int numberSampledConstraints = 0;                      // 1000; // Number of constraints that will be evaluated each iteration
+		                                                       //  this number needs to be zero in order to do no reduction for constraint projection
+		double massPerUnitArea = 2.;
+		double dampingAlpha = 0;
+		bool makeTets = true;
+		double rhsRegularizationWeight = 0.;
+		double yTranslation = 3.;                               // in case of grip is activated
 
 		// Start a viewer that uses a simple plugin to draw the simulated mesh
 		// (it does numIterations local/global steps to simulate the next timestep
 		// before drawing the mesh).
-		SimViewer simViewer(verts, faces, velos, meshURL, numIterations, m_png_frames_directory);
+		
+		SimViewer simViewer(verts, faces, velos, meshURL, m_png_frames_directory, numIterations, timeStep,
+			                numberPositionPCAModes, pca_basesDir,
+							numberPositionSPLOCSModes, splocs_basesDir,
+							numberSamplesForVertexPosSubspace,
+							radiusMultiplierForVertexPosSubspace,
+							dimensionOfConstraintProjectionsSubspace,
+							radiusMultiplierForConstraintProjectionsSubspace,
+							numberSampledConstraints,
+							massPerUnitArea,
+							dampingAlpha,
+							makeTets,
+							rhsRegularizationWeight,
+							yTranslation);
 
 		// Eigen::MatrixXd verts3 = Eigen::MatrixXd(verts);
 		// Eigen::MatrixXi faces3 = Eigen::MatrixXi(faces);

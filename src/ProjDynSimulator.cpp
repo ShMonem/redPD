@@ -49,15 +49,16 @@ using namespace PD;
 ProjDynSimulator::ProjDynSimulator
 (PDTriangles& triangles, PDPositions& initialPositions, PDPositions& initialVelocities,
 	PDScalar timeStep,
-	int m_numPosPODModes,
-	int m_numQDEIMComponents,
-
+	int numPosPODModes,
+	std::string pca_directory,
+	int numSPLOCSModes,
+	std::string splocs_directory,
 	int numSamplesPosSubspace,
 	PDScalar baseFunctionRadius,
 	int interpolBaseSize,
 	PDScalar rhsInterpolWeightRadius,
 	int numConstraintSamples,
-	PDScalar massPerUnitArea,     // =2 , magical number!
+	PDScalar massPerUnitArea,     
 	PDScalar dampingAlpha,
 	bool makeTets,
 	std::string meshURL,
@@ -70,46 +71,50 @@ ProjDynSimulator::ProjDynSimulator
 	m_parallelVUpdate(false),
 	m_parallelVUpdateBSize(PROJ_DYN_VPOS_BLOCK_SIZE),
 
-	m_rhsInterpolBaseSize(interpolBaseSize),
-
-	m_numSamplesPosSubspace(numSamplesPosSubspace),
-	m_numConstraintSamples(numConstraintSamples),
-
 	m_meshURL(meshURL),
 	m_meshName(PD::getMeshName(meshURL)),
-
 	m_numTets(0),
 	m_hasTetrahedrons(false),
-
 	m_rayleighDampingAlpha(dampingAlpha),
 
+	// LBS bases for position parameters:
 	m_usingSkinSubspaces(numSamplesPosSubspace > 0),
 	m_rhsInterpolation(numConstraintSamples > 0),
 	m_baseFunctionRadius(baseFunctionRadius),
 
-	// POD part-----------------------------
-	m_numPosPODModes(m_numPosPODModes),
-	m_usingPODPosSubspaces(m_numPosPODModes > 0), 
+	// LBS bases for constraints parameters:
+	m_rhsInterpolBaseSize(interpolBaseSize),
+	m_numSamplesPosSubspace(numSamplesPosSubspace),
+	m_numConstraintSamples(numConstraintSamples),
+
+	// Snapshots bases for position parameters:
+	m_numPosPODModes(numPosPODModes),
+	m_usingPODPosSubspaces(numPosPODModes > 0), 
+	
 	isPODLocal(true),
 	isLocalPOD_Sparse(true),    
-	isPODBasisOrthogonal(false),
-	m_usingSPLOCSPosSubspaces(false),       // when the basis being loaded as POD basis are acu]tually SPLOCS basis, then specify here!
+	isPODBasisOrthogonal(PCA_POSITION_ORTHOGONAL == "_Orthogonalized"),
+	m_numPosSPLOCSModes(numSPLOCSModes),
+	m_usingSPLOCSPosSubspaces(numSPLOCSModes >0),       // when the basis being loaded as POD basis are acu]tually SPLOCS basis, then specify here!
 	podUsedVerticesOnly(numConstraintSamples > 0),
-	//QDEIM part-----------------------------
-	m_numQDEIMModes(m_numQDEIMComponents),
-	m_usingQDEIMComponents(m_numQDEIMComponents>0),
+	
+	m_usePosSnapBases(numPosPODModes > 0 || numSPLOCSModes > 0),
+	//TODO: DEIM part-----------------------------
+	m_numQDEIMModes(0),
+	m_usingQDEIMComponents(false),
 	m_TetStrainOnly(true),
 	
 	m_solveDeimLS(false),   // false: use deim for modes of blocks, interpolationBlocks are x/y/z separate
 							// true: stack interpolationBlocks from x/y/z and use LS to find the reduced constraints projections
-	//---------------------------------------
-	// full part-----------------------------
+	
+	// Full order simulations (where snapshots might be collected)
 	m_usingPosSubspaces(m_numPosPODModes+numSamplesPosSubspace > 0),  
 	recordingSTpSnapshots(false), 
 	recordingPSnapshots(false),
 	// note recording happens only for one constraint at a time
 	recordingTetStrainOnly(false),
-	//---------------------------------------
+	
+	// Time measures and solver parameters:
 	m_localStepStopWatch(10000, 10000),
 	m_globalStepStopWatch(10000, 10000),
 	m_totalStopWatch(10000, 10000),
@@ -150,6 +155,10 @@ ProjDynSimulator::ProjDynSimulator
 	m_usedVertexUpdaterSparse(nullptr)
 #endif
 {
+
+	m_PCABasesDir = pca_directory;
+	m_SPLOCSBasesDir = splocs_directory;
+
 	once = false;
 
 	// Construct position and triangle matrices
@@ -326,12 +335,12 @@ void PD::ProjDynSimulator::recomputeWeightedForces() {
 	m_fExtWeighted *= m_timeStep * m_timeStep;
 	m_fGravWeighted *= m_timeStep * m_timeStep;
 		
-	if (m_usingSkinSubspaces && m_isSetup && !m_usingPODPosSubspaces) {
+	if (m_usingSkinSubspaces && m_isSetup && !m_usePosSnapBases) {
 
 		projectToSubspace(m_fExtWeightedSubspace, m_fExtWeighted, false);
 		projectToSubspace(m_fGravWeightedSubspace, m_fGravWeighted, false);
 	}
-	if (m_usingPODPosSubspaces && m_isSetup && !m_usingSkinSubspaces) {    
+	if (m_usePosSnapBases && m_isSetup && !m_usingSkinSubspaces) {
 		
 		m_fExtWeightedSubspace.resize(m_baseXFunctions.cols(), 3);
 		m_fGravWeightedSubspace.resize(m_baseXFunctions.cols(), 3);
@@ -591,7 +600,7 @@ void PD::ProjDynSimulator::evaluatePositionsAtUsedVertices(PDPositions& usedPos,
 			}
 		}
 	}
-	else if(m_usingPODPosSubspaces){
+	else if(m_usePosSnapBases){
 	int i = 0;
 	PROJ_DYN_PARALLEL_FOR
 		for (i = 0; i < vSize; i++) {
@@ -1003,7 +1012,7 @@ void PD::ProjDynSimulator::updateUsedVertices()
 		}
 	#endif
 	}
-	else if(m_usingPODPosSubspaces){
+	else if(m_usePosSnapBases){
 	
 		PDMatrix Ax(m_usedVertices.size(), m_baseXFunctions.cols());
 		PDMatrix Ay(m_usedVertices.size(), m_baseYFunctions.cols());
@@ -1206,35 +1215,18 @@ void PD::ProjDynSimulator::createPositionSubspace(unsigned int numSamples, bool 
 		// read basis form a binary file
 		PDMatrix Upca;
 		// read the .bin file according to the pr-edefined number of components in (main.cpp/ doubleHRPD)
-		if(m_usingSPLOCSPosSubspaces && m_usingPODPosSubspaces){
-			if (PD::loadBaseBinary("/home/shaimaa/libigl/tutorial/doubleHRPD/basisExperimentedwithPD/splocs/qSplocsBunnyF601K"+std::to_string(numSamples)+".bin", Upca)) {
-		std::cout << "POD bais binary file has been found, loading basis..." << std::endl;
-		}
-		std::cout << "POD basis size is ("<< Upca.rows() << "," << Upca.cols() << ")" << std::endl;
+		if(m_usingSPLOCSPosSubspaces && !m_usingPODPosSubspaces){
+			if (PD::loadBaseBinary(m_SPLOCSBasesDir + "K" + std::to_string(numSamples) + ".bin", Upca)) {
+				std::cout << "SPLOCS basis size is (" << Upca.rows() << "," << Upca.cols() << ")" << std::endl;
+			}
 		}
 		else if (m_usingPODPosSubspaces && !m_usingSPLOCSPosSubspaces){
-			if(isPODLocal){
-				if(isLocalPOD_Sparse){  // bases local and sparse
-					if (PD::loadBaseBinary("/home/shaimaa/libigl/tutorial/doubleHRPD/basisExperimentedwithPD/qSparse_noMeanPod_Volkwein_Standarized_Localized_nonOrthogonalized_Released601K400.bin", Upca)) {
-
-					//if (PD::loadBaseBinary("/home/shaimaa/libigl/tutorial/doubleHRPD/basisExperimentedwithPD/podLocal/qPodLocalVollkweinBunnyF601K"+std::to_string(numSamples)+".bin", Upca)) {
-					std::cout << "Local POD bais binary file has been found, loading basis..." << std::endl;
-					}
-				}
-				else{  // bases only local
-					if (PD::loadBaseBinary("/home/shaimaa/libigl/tutorial/doubleHRPD/basisExperimentedwithPD/podLocal/qPodLocalVollkweinBunnyF601K"+std::to_string(numSamples)+".bin", Upca)) {
-					std::cout << "Local POD bais binary file has been found, loading basis..." << std::endl;
-					}
-				}
+			if (PD::loadBaseBinary(m_PCABasesDir + "K" + std::to_string(numSamples) + ".bin", Upca)) {
+				std::cout << "POD basis size is (" << Upca.rows() << "," << Upca.cols() << ")" << std::endl;
 			}
-			else{  // global bases
-				if (PD::loadBaseBinary("/home/shaimaa/libigl/tutorial/doubleHRPD/basisExperimentedwithPD/pod/qPodGlobalVollkweinBunnyF601K"+std::to_string(numSamples)+".bin", Upca)) {
-				std::cout << "Global POD bais binary file has been found, loading basis..." << std::endl;
-				}
-			}
-			std::cout << "POD basis size is ("<< Upca.rows() << "," << Upca.cols() << ")" << std::endl; 
 		}
-		m_basePODFunctionsTemporary = Upca;
+		
+		m_snapshotsBasesTmp = Upca;
 		//std::cout.precision(17);
 		
 		if(Upca.cols() != 3*numSamples){
@@ -1573,26 +1565,29 @@ void ProjDynSimulator::printTimeMeasurements() {
 	
 	std::cout << "===========================================================" << std::endl;
 
-	if(m_usingSkinSubspaces || m_rhsInterpolation){
-	std::cout << "LBS reduction for position and/or constraints subspaces" << std::endl;
-	std::cout << m_numSamplesPosSubspace << " pos basis , and "<< m_rhsInterpolBaseSize << " constraints projection basis" << std::endl;
+	if(m_usingSkinSubspaces){
+	std::cout << "LBS reduction for position subspace" << std::endl;
+	std::cout << m_numSamplesPosSubspace << " pos basis." << std::endl;
 	
 	}
-	if( m_usingPODPosSubspaces){
-	if(m_usingSPLOCSPosSubspaces) std::cout << "SPOLCS reduction for position subspace" << std::endl;
-	else std::cout << "POD reduction for position subspace" << std::endl;
-	std::cout << m_numPosPODModes << " components " << std::endl;
-	
+	if(m_usePosSnapBases){
+		if (m_usingSPLOCSPosSubspaces) {
+			std::cout << "SPOLCS reduction for position subspace" << std::endl;
+			std::cout << m_numPosSPLOCSModes << " components " << std::endl;
+		}
+		else {
+			std::cout << "POD reduction for position subspace" << std::endl;
+			std::cout << m_numPosPODModes << " components " << std::endl;
+		}
 	}
-	else if(m_usingSPLOCSPosSubspaces && !m_usingSkinSubspaces && !m_rhsInterpolation && m_usingPODPosSubspaces){
-		std::cout << "SPLOCS reduction for position subspace" << std::endl;
-		std::cout << m_numPosPODModes << "components " << std::endl;
+	if (m_rhsInterpolation) {
+		std::cout << "LBS reduction constraints subspace" << std::endl;
+		std::cout << m_rhsInterpolBaseSize << " constraints projection basis" << std::endl;
+
 	}
+
 	std::cout << "m_timeStep: " << m_timeStep << std::endl;
 	std::vector< ProjDynConstraint* >* usedConstraints = &m_constraints;
-	if (m_rhsInterpolation || (m_usingQDEIMComponents && m_solveDeimLS)) {
-		usedConstraints = &m_sampledConstraints;
-	}
 	int numConstraints = usedConstraints->size();
 	
 	std::cout << "# of constraints: " << numConstraints << ", using " << m_usedVertices.size() << " of " << m_numVertices << " vertices." << std::endl;
@@ -1860,27 +1855,34 @@ void ProjDynSimulator::setup() {
 	/* First, in case we use subspaces to reduce position, we create or load position subspace basis functions */
 	if (m_usingPosSubspaces) {
 		//bool loadSuccess = false;
-		if (m_usingSkinSubspaces && !m_usingPODPosSubspaces) {
+		if (m_usingSkinSubspaces && !m_usePosSnapBases) {
 			std::cout << "Creating subspaces..." << std::endl;
 			createPositionSubspace(m_numSamplesPosSubspace,true, false); // pick wich true/false: do we useSkinningSpace? or usingPODPosSubSpace?
 			finalizeBaseFunctions(); 
 		}
-		else if (m_usingPODPosSubspaces && !m_usingSkinSubspaces){
+		else if (m_usePosSnapBases && !m_usingSkinSubspaces){
 			std::cout << "Loading subspaces..." << std::endl;
-			createPositionSubspace(m_numPosPODModes,false, true);  // here we choose usingPODPosSubSpace
-			std::cout << "POD subspaces have been loaded..." << std::endl;
+			if (m_usingPODPosSubspaces) {
+				createPositionSubspace(m_numPosPODModes, false, true);  // here we choose usingPODPosSubSpace
+				std::cout << "POD subspaces have been loaded..." << std::endl;
+			}
+			else if (m_usingSPLOCSPosSubspaces)
+			{
+				createPositionSubspace(m_numPosSPLOCSModes, false, true);  // here we choose usingPODPosSubSpace
+				std::cout << "SPLOCS subspaces have been loaded..." << std::endl;
+			}
 			
 			// In the POD case, different handling of basis are required, 
 			// we decople the (X, Y, Z) dimensions and use three matrices so that we solve in parallel for each
 			// slicing m_baseFunctions to m_baseXFunctions, m_baseYFunctions and m_baseYFunctions 
 			// m_numPosPODModes+1: because we add the original mesh as a component too
-			m_baseXFunctions.setZero(m_basePODFunctionsTemporary.rows(), m_numPosPODModes+1);
-			m_baseYFunctions.setZero(m_basePODFunctionsTemporary.rows(), m_numPosPODModes+1);
-			m_baseZFunctions.setZero(m_basePODFunctionsTemporary.rows(), m_numPosPODModes+1);
+			m_baseXFunctions.setZero(m_snapshotsBasesTmp.rows(), m_numPosPODModes+1);
+			m_baseYFunctions.setZero(m_snapshotsBasesTmp.rows(), m_numPosPODModes+1);
+			m_baseZFunctions.setZero(m_snapshotsBasesTmp.rows(), m_numPosPODModes+1);
 			
 			
-			if(3*m_numPosPODModes != m_basePODFunctionsTemporary.cols()){  
-				std::cout << "Sizes are not matching... we have "<<  m_basePODFunctionsTemporary.cols() <<" columns and 3*m_numPosPODModes = "<< 3*m_numPosPODModes <<  std::endl;
+			if(3*m_numPosPODModes != m_snapshotsBasesTmp.cols()){  
+				std::cout << "Sizes are not matching... we have "<<  m_snapshotsBasesTmp.cols() <<" columns and 3*m_numPosPODModes = "<< 3*m_numPosPODModes <<  std::endl;
 			}
 			
 			
@@ -1889,9 +1891,9 @@ void ProjDynSimulator::setup() {
 				//std::cout << normFactor << std::endl;
 				for(int v = 0 ; v < m_numVertices; v++){
 					// using different signs for the basis rotates the fist frame!
-					m_baseXFunctions(v, k) = m_basePODFunctionsTemporary(v, k);
-					m_baseYFunctions(v, k) = m_basePODFunctionsTemporary(v, m_numPosPODModes + k);
-					m_baseZFunctions(v, k) = m_basePODFunctionsTemporary(v, 2*m_numPosPODModes + k);
+					m_baseXFunctions(v, k) = m_snapshotsBasesTmp(v, k);
+					m_baseYFunctions(v, k) = m_snapshotsBasesTmp(v, m_numPosPODModes + k);
+					m_baseZFunctions(v, k) = m_snapshotsBasesTmp(v, 2*m_numPosPODModes + k);
 				}
 			}
 			// add the original mesh as the component
@@ -1912,12 +1914,12 @@ void ProjDynSimulator::setup() {
 	// Sparse subspace basis needs to be available before the snapshot groups get initialized
 		if(m_useSparseMatricesForSubspace){
 			std::cout << "Sparsifing POD base matrcies... " << std::endl;
-			if(m_usingSkinSubspaces && !m_usingPODPosSubspaces){
+			if(m_usingSkinSubspaces && !m_usePosSnapBases){
 				// case Skinning subspaces
 				m_baseFunctionsSparse = m_baseFunctions.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
 				m_baseFunctionsTransposedSparse = m_baseFunctionsTransposed.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
 			}
-			if(m_usingPODPosSubspaces && !m_usingSkinSubspaces){
+			if(m_usePosSnapBases && !m_usingSkinSubspaces){
 			// case POD subspaces
 				
 				m_baseXFunctionsSparse = m_baseXFunctions.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
@@ -1930,7 +1932,7 @@ void ProjDynSimulator::setup() {
 				m_baseZFunctionsTransposedSparse = m_baseZFunctionsTransposed.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);				
 			}
 		}
-		
+		/*
 		if(m_usingQDEIMComponents){
 
 			// load and prepare the M and S mats to do nonlinear reduction
@@ -2009,14 +2011,14 @@ void ProjDynSimulator::setup() {
 			m_yMqdeimSparse = m_yMqdeim.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
 			m_zMqdeimSparse = m_zMqdeim.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
 				
-		} 
+		} */
 	} // End of basis loading 
 	
 	/*  Second, if using subspaces, after finalizing the basis function (basis and basis.T ready!), we set up projection of full positions into the subspace.
 	Initial subspace positions/velocities will be computed from full positions/velocities. */
 	
 	if(m_usingPosSubspaces){
-		if (m_usingSkinSubspaces && !m_usingPODPosSubspaces) {
+		if (m_usingSkinSubspaces && !m_usePosSnapBases) {
 			std::cout << "Projecting positions, velocities and forces into the Skinning subspace... " << std::endl;
 			// We need to project the current positions to the subspace, which will be
 			// done by solving a  least squares problem since the subspace is not assumed
@@ -2027,13 +2029,13 @@ void ProjDynSimulator::setup() {
 			m_positionsSubspace.setZero(m_baseFunctions.cols(), 3);
 			m_velocitiesSubspace.setZero(m_baseFunctions.cols(), 3);
 
-			projectToSubspace(m_positionsSubspace, m_positions, false);   
+			projectToSubspace(m_positionsSubspace, m_positions, false);
 			projectToSubspace(m_velocitiesSubspace, m_velocities, false);
 
 			m_positions = m_baseFunctions * m_positionsSubspace;
 			m_velocities = m_baseFunctions * m_velocitiesSubspace;
 		}
-		else if(m_usingPODPosSubspaces && !m_usingSkinSubspaces){
+		else if(m_usePosSnapBases && !m_usingSkinSubspaces){
 			std::cout << "Prepapring subSpcaces and POD Subspaces solvers.... " << std::endl;
 			// TODO: We need to project the current positions to the subspace, which can be done through matrix-vector product 
 			// because in this case matrices are assumed to be orthonormal.
@@ -2271,7 +2273,7 @@ void ProjDynSimulator::setup() {
 
 	/* And, if we use position spaces reduction, we project the momentum terms in bothe RHS and RHL to low dim subspaces*/
 	
-	if (m_usingSkinSubspaces&& !m_usingPODPosSubspaces) {
+	if (m_usingSkinSubspaces&& !m_usePosSnapBases) {
 		std::cout << "Projecting the momentum term RHS to skinning subspaces, for the global system ..." << std::endl;
 		m_rhsFirstTermMatrixPre = m_baseFunctionsTransposed * m_massMatrix * m_baseFunctions;
 		m_rhsFirstTermMatrix = m_rhsFirstTermMatrixPre * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)
@@ -2286,7 +2288,7 @@ void ProjDynSimulator::setup() {
 		m_subspaceLHS_mom += eps;   // m_subspaceLHS_mom = (U.T M U / h^2)
 		
 	}
-	else if (m_usingPODPosSubspaces && !m_usingSkinSubspaces) {
+	else if (m_usePosSnapBases && !m_usingSkinSubspaces) {
 	
 		rhsX2.setZero(m_baseXFunctions.cols(), 3);
 		rhsY2.setZero(m_baseYFunctions.cols(), 3);
@@ -2389,7 +2391,7 @@ void ProjDynSimulator::setup() {
 	if (m_rhsInterpolation) {
 		std::cout << "Building and factorizing the complete LHS matrix... " << std::endl;
 			
-		if (m_usingSkinSubspaces && !m_usingPODPosSubspaces) {    /// Here we have Skinning positionSubspace reduction and rhdInterpolation
+		if (m_usingSkinSubspaces && !m_usePosSnapBases) {    /// Here we have Skinning positionSubspace reduction and rhdInterpolation
 			m_subspaceLHS_inner.setZero(m_baseFunctions.cols(), m_baseFunctions.cols());
 			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_pos_and_constraint/";
 
@@ -2430,7 +2432,7 @@ void ProjDynSimulator::setup() {
 				std::cout << "Warning: Factorization denseSolver of LHS matrix for global system was not successful!.. make sure PROJ_DYN_SPARSIFY is set TRUE!" << std::endl;
 			}
 		}
-		else if(m_usingPODPosSubspaces && !m_usingSkinSubspaces){  /// Here we have POD positionSubspace and rhdInterpolation
+		else if(m_usePosSnapBases && !m_usingSkinSubspaces){  /// Here we have POD positionSubspace and rhdInterpolation
 			m_subspaceXLHS_inner.setZero(m_baseXFunctions.cols(), m_baseXFunctions.cols());
 			m_subspaceYLHS_inner.setZero(m_baseXFunctions.cols(), m_baseXFunctions.cols());
 			m_subspaceZLHS_inner.setZero(m_baseXFunctions.cols(), m_baseXFunctions.cols());
@@ -2584,7 +2586,7 @@ void ProjDynSimulator::setup() {
 			
 		conMat.setFromTriplets(entries.begin(), entries.end());
 		
-		if (m_usingSkinSubspaces&& !m_usingPODPosSubspaces) { // Slow case: using position subspaces but no rhs interpolation
+		if (m_usingSkinSubspaces&& !m_usePosSnapBases) { // Slow case: using position subspaces but no rhs interpolation
 			
 			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_pos/";
 			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
@@ -2604,7 +2606,7 @@ void ProjDynSimulator::setup() {
 			m_denseSolver.compute(m_lhsMatrixSampled);  // 
 			std::cout << "Size of sampled, dense lhs mat: " << m_lhsMatrixSampled.rows() << ", " << m_lhsMatrixSampled.cols() << std::endl;
 		}		
-		else if (m_usingPODPosSubspaces && !m_usingSkinSubspaces) { // Slow case: using position subspaces but no rhs interpolation
+		else if (m_usePosSnapBases && !m_usingSkinSubspaces) { // Slow case: using position subspaces but no rhs interpolation
 			
 			if(m_usingQDEIMComponents){
 				if(m_solveDeimLS){
@@ -2745,17 +2747,17 @@ void ProjDynSimulator::setup() {
 	   		while, otherwise in case of full simulations or POD subspaces we need all verties.
 	   		TODO: consider a list of vertices when using splocs zum beispiel!
 	*/
-	if (m_rhsInterpolation && m_usingSkinSubspaces && !m_usingPODPosSubspaces) {
+	if (m_rhsInterpolation && m_usingSkinSubspaces && !m_usePosSnapBases) {
 		//std::cout << "Determining used vertices..." << std::endl;
 		updateUsedVertices();
 	}
-	else if (m_usingSkinSubspaces && !m_usingPODPosSubspaces) {
+	else if (m_usingSkinSubspaces && !m_usePosSnapBases) {
 		for (unsigned int v : m_samples) {
 			m_additionalUsedVertices.push_back(v);
 		}
 		updateUsedVertices();
 	}
-	else if (m_rhsInterpolation && m_usingPODPosSubspaces){
+	else if (m_rhsInterpolation && m_usePosSnapBases){
 		
 		for (unsigned int v : m_constraintVertexSamples) { // here we use only constraint samples
 			m_additionalUsedVertices.push_back(v);
@@ -2779,7 +2781,7 @@ void ProjDynSimulator::setup() {
 	if (m_usingPosSubspaces && m_useSparseMatricesForSubspace) {
 		//std::cout << "PROJ_DYN_SPARSIFY is set TRUE.. Sparsifying the LHS complete matrix..." << std::endl;
 		
-		if(m_usingSkinSubspaces && !m_usingPODPosSubspaces){
+		if(m_usingSkinSubspaces && !m_usePosSnapBases){
 			PDSparseMatrix lhsMatrixSampledSparse = m_lhsMatrixSampled.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
 			m_subspaceSystemSolverSparse.compute(lhsMatrixSampledSparse);
 			if (m_subspaceSystemSolverSparse.info() != Eigen::Success) {
@@ -2801,7 +2803,7 @@ void ProjDynSimulator::setup() {
 			updateParallelVUpdateBlocks();
 		
 		}
-		if(m_usingPODPosSubspaces && !m_usingSkinSubspaces){
+		if(m_usePosSnapBases && !m_usingSkinSubspaces){
 			PDSparseMatrix lhsXMatrixSampledSparse = m_lhsXMatrixSampled.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);	
 			PDSparseMatrix lhsYMatrixSampledSparse = m_lhsYMatrixSampled.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
 			PDSparseMatrix lhsZMatrixSampledSparse = m_lhsZMatrixSampled.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
@@ -3026,7 +3028,7 @@ void ProjDynSimulator::step(int numIterations)
 	//************************************
 	
 	// Compute s and handle collisions/user interaction case of m_usingSkinSubspaces with/out m_rhsInterpolation
-	if(m_usingSkinSubspaces && !m_usingPODPosSubspaces){ 
+	if(m_usingSkinSubspaces && !m_usePosSnapBases){
 		if (!m_rhsInterpolation) {
 			oldFullPos = m_positions;
 		}
@@ -3120,8 +3122,8 @@ void ProjDynSimulator::step(int numIterations)
 		// Correct vertex positions of gripped and collided vertices
 		handleGripAndCollisionsUsedVs(s, true);       // true means to update the vertices after handling collection 
 	}
-	// Compute s and handle collisions/user interaction case of m_usingPODPosSubspaces similaly with/out m_rhsInterpolation	
-	else if (m_usingPODPosSubspaces && !m_usingSkinSubspaces) {    
+	// Compute s and handle collisions/user interaction case of m_usePosSnapBases similaly with/out m_rhsInterpolation	
+	else if (m_usePosSnapBases && !m_usingSkinSubspaces) {
 		
 		if (!m_rhsInterpolation ) {
 			oldFullPos = m_positions;
@@ -3319,13 +3321,13 @@ void ProjDynSimulator::step(int numIterations)
 	}
 		
 	// Some additional initializations/updates
-	if (m_usingSkinSubspaces && m_constraintSamplesChanged && !m_usingPODPosSubspaces) {
+	if (m_usingSkinSubspaces && m_constraintSamplesChanged && !m_usePosSnapBases) {
 		updateUsedVertices();
 	
 		updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);     // update at used vertices only = true
 	
 	}
-	if (!m_usingSkinSubspaces && m_constraintSamplesChanged && m_usingPODPosSubspaces && m_rhsInterpolation) {
+	if (!m_usingSkinSubspaces && m_constraintSamplesChanged && m_usePosSnapBases && m_rhsInterpolation) {
 	
 		updateUsedVertices();
 
@@ -3351,46 +3353,6 @@ void ProjDynSimulator::step(int numIterations)
 	// Local global loop
 	//************************************
 	for (int i = 0; i < numIterations; i++) { 
-		
-		/*
-		// Store  reducedSubMesh(vertices, faces) or reducedSubMesh(only vertices)
-		//DO REMEMBER to change the directory according to which mesh you use!! ---> example  ../meshFrames/bunny
-		if(m_usingSkinSubspaces && !m_rhsInterpolation && !m_usingPODPosSubspaces){
-		igl::writeOFF( "/home/shaimaa/libigl/tutorial/doubleHRPD/meshFrames_fullSimulationsOFF/bunny/fullLBSOnlyPosFrames/LBS"+std::to_string(m_numSamplesPosSubspace-1)+"/subSpacePos"+ std::to_string(m_frameCount)+ ".off" ,m_positions, m_triangles);
-		}
-		
-		// POD storage directory
-		if(!m_usingSkinSubspaces && m_usingPODPosSubspaces && isPODLocal && !m_usingSPLOCSPosSubspaces ){
-		igl::writeOFF( "/home/shaimaa/libigl/tutorial/doubleHRPD/meshFrames_fullSimulationsOFF/bunny/fullPODLocalPosNoRigidAlignFrames/fullPODLocalPosF601K"+std::to_string(m_numPosPODModes)+"/subSpacePos"+ std::to_string(m_frameCount)+ ".off" ,m_positions, m_triangles);
-		} 
-		if(!m_usingSkinSubspaces && m_usingPODPosSubspaces && !isPODLocal && !m_usingSPLOCSPosSubspaces ){
-		igl::writeOFF( "/home/shaimaa/libigl/tutorial/doubleHRPD/meshFrames_fullSimulationsOFF/bunny/fullPODPosNoRigidAlignFrames/fullPODPosF601K"+std::to_string(m_numPosPODModes)+"/subSpacePos"+ std::to_string(m_frameCount)+ ".off" ,m_positions, m_triangles);
-		}
-		
-		// SPLOCS storage directory
-		if(!m_usingSkinSubspaces && m_usingSPLOCSPosSubspaces && m_usingPODPosSubspaces){
-		igl::writeOFF( "/home/shaimaa/libigl/tutorial/doubleHRPD/meshFrames_fullSimulationsOFF/bunny/fullSPLOCSPosNotRigidAlignFrames/fullSPLOCSPosF601K"+std::to_string(m_numPosPODModes)+"/subSpacePos"+ std::to_string(m_frameCount)+ ".off" ,m_positions, m_triangles);
-		} 
-		
-		// tetStrain snapshots storage directory
-		if(!m_usingSkinSubspaces && !m_usingSPLOCSPosSubspaces && !m_usingPODPosSubspaces && recordingSTpSnapshots){
-				// note recording happens only for one constraint at a time
-			if(recordingTetStrainOnly){
-				igl::writeOFF( "/home/shaimaa/libigl/tutorial/doubleHRPD/meshFrames_fullSimulationsOFF/bunny/tetConstraintSnapshots/subSpacePos"+ std::to_string(m_frameCount)+ ".off" ,m_positions, m_triangles);
-			}
-		}
-		
-		if(m_usingSkinSubspaces && m_rhsInterpolation){
-		igl::writeOFF( "/home/shaimaa/libigl/tutorial/doubleHRPD/meshFrames_fullSimulationsOFF/bunny/fullLBS4PosAndConstrFrames/LBS"+std::to_string(m_numSamplesPosSubspace)+"_LBS"+std::to_string(m_rhsInterpolBaseSize)+"/subSpacePos"+ std::to_string(m_frameCount)+ ".off" ,m_positions, m_triangles);
-		}
-		
-		if(m_usingPODPosSubspaces && m_rhsInterpolation){
-		igl::writeOFF( "/home/shaimaa/libigl/tutorial/doubleHRPD/meshFrames_fullSimulationsOFF/bunny/fullPOD4PosAndLBS4ConstrFrames/POD"+std::to_string(m_numPosPODModes)+"_LBS"+std::to_string(m_rhsInterpolBaseSize)+"/subSpacePos"+ std::to_string(m_frameCount)+ ".off" ,m_positions, m_triangles);
-		}
-		 
-		
-		//PD::storePosBinary(m_positionsSubspace, "/home/shaimaa/libigl/tutorial/doubleHRPD/meshFrames_skinSubspaceSimOFF/bunny/subPos"+ std::to_string(m_frameCount)+ ".bin");
-		*/
 
 		//************************************
 		// Local step: Constraint projections
@@ -3401,13 +3363,13 @@ void ProjDynSimulator::step(int numIterations)
 		if (m_rhsInterpolation) { // Local step approximation via fitting method with/out pos reduction
 			m_localStepOnlyProjectStopWatch.startStopWatch();
 			
-			if (m_usingSkinSubspaces && !m_usingPODPosSubspaces) { // here rhs2= lambda U.T S.T V p
+			if (m_usingSkinSubspaces && !m_usePosSnapBases) { // here rhs2= lambda U.T S.T V p
 				rhs2.setZero();
 				for (auto& g : m_snapshotGroups)
 					g.approximateRHS(m_positionsUsedVs, rhs2, m_collidedVerts);
 				addAdditionalConstraints(m_positionsUsedVs, rhs2, m_collidedVerts);
 			}
-			else if (m_usingPODPosSubspaces && !m_usingSkinSubspaces) {
+			else if (m_usePosSnapBases && !m_usingSkinSubspaces) {
 				//std::cout << "compute LBS local step and project it to POD pos subspace" << std::endl;
 				// here  no projection to Position subspace m_rhsInterpol = lambda S.T V p
 				m_rhsInterpol.setZero(m_positions.rows(), 3);
@@ -3450,7 +3412,7 @@ void ProjDynSimulator::step(int numIterations)
 				//std::vector< PDScalar > curWeightx(m_numQDEIMModes), curWeighty(m_numQDEIMModes), curWeightz(m_numQDEIMModes);
 				
 				PDPositions reducedAuxilaryX(deimBasisCols, 3), reducedAuxilaryY(deimBasisCols, 3), reducedAuxilaryZ(deimBasisCols, 3);
-				if(m_usingPODPosSubspaces){
+				if(m_usePosSnapBases){
 					
 					// Compute projections
 					m_localStepOnlyProjectStopWatch.startStopWatch();
@@ -3572,7 +3534,7 @@ void ProjDynSimulator::step(int numIterations)
 		m_momentumStopWatch.startStopWatch();
 		
 		// Add the term from the conservation of momentum 	
-		if(m_usingSkinSubspaces && !m_usingPODPosSubspaces){
+		if(m_usingSkinSubspaces && !m_usePosSnapBases){
 	
 			// If using subspaces, transform the r.h.s to the subspace
 			// (which is already the case when using rhs interpolation)
@@ -3598,7 +3560,7 @@ void ProjDynSimulator::step(int numIterations)
 				}
 			
 		}
-		else if(m_usingPODPosSubspaces && !m_usingSkinSubspaces){
+		else if(m_usePosSnapBases && !m_usingSkinSubspaces){
 			// If using subspaces, transform the r.h.s to the subspace
 			// i.e we compute rhs2 =  (U.T M U s/ h^2) + lambda U.T S.T p 
 			rhs2.setZero(m_baseXFunctionsTransposed.rows(), 3);
@@ -3743,7 +3705,7 @@ void ProjDynSimulator::step(int numIterations)
 		m_globalStepStopWatch.startStopWatch();
 		// Solve, for x, y and z in parallel	
 		if (m_usingPosSubspaces) {
-			if(m_usingSkinSubspaces && !m_usingPODPosSubspaces){
+			if(m_usingSkinSubspaces && !m_usePosSnapBases){
 				// Only subsspace positions are updated, the full positions are only evaluated
 				// where the constraints need them.
 				int d = 0;
@@ -3758,7 +3720,7 @@ void ProjDynSimulator::step(int numIterations)
 					}
 				}
 			}
-			else if(m_usingPODPosSubspaces && !m_usingSkinSubspaces){
+			else if(m_usePosSnapBases && !m_usingSkinSubspaces){
 				// we solve for the subPostions: (U.T M U/h^2  + lambda U.T S.T S U) q = lambda U.T S.T p + (U.T M U s/ h^2)
 				if (m_useSparseMatricesForSubspace) {
 					//std::cout << "Solving global system using sprse solvers" << std::endl;
@@ -3848,10 +3810,10 @@ void ProjDynSimulator::step(int numIterations)
 		// updated after.
 		m_updatingVPosStopWatch.startStopWatch();
 		if (m_usingPosSubspaces && !(i == numIterations - 1)) {
-			if (m_usingSkinSubspaces && m_rhsInterpolation && !m_usingPODPosSubspaces) {
+			if (m_usingSkinSubspaces && m_rhsInterpolation && !m_usePosSnapBases) {
 				updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);  // update for used vertcies only
 			}
-			else if(m_usingPODPosSubspaces ){
+			else if(m_usePosSnapBases){
 				if (!m_rhsInterpolation) updatePODPositionsSampling(m_positions, m_positionsSubspace, podUsedVerticesOnly);       // no local supprt
 				else if (m_rhsInterpolation) updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, podUsedVerticesOnly);
 			}
@@ -3873,7 +3835,7 @@ void ProjDynSimulator::step(int numIterations)
 	}
 	else if (m_rhsInterpolation) {
 		if(m_usingSkinSubspaces) s = m_positionsSubspace;
-		if(m_usingPODPosSubspaces){
+		if(m_usePosSnapBases){
 			 s = m_positionsSubspace;
 			 updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, podUsedVerticesOnly);
 		}
@@ -3891,7 +3853,7 @@ void ProjDynSimulator::step(int numIterations)
 	m_fullUpdateStopWatch.startStopWatch();
 	
 	
-	if (m_usingSkinSubspaces && !m_usingPODPosSubspaces) {
+	if (m_usingSkinSubspaces && !m_usePosSnapBases) {
 		if (m_useSparseMatricesForSubspace) {
 #ifdef PROJ_DYN_USE_CUBLAS
 			if (m_vPosGPUUpdate) {
@@ -3935,7 +3897,7 @@ void ProjDynSimulator::step(int numIterations)
 		}
 	}
 	
-	if (m_usingPODPosSubspaces && !m_usingSkinSubspaces) {
+	if (m_usePosSnapBases && !m_usingSkinSubspaces) {
 		if (m_useSparseMatricesForSubspace) {
 #ifdef PROJ_DYN_USE_CUBLAS
 			if (m_vPosGPUUpdate) {
@@ -4255,7 +4217,7 @@ void PD::ProjDynSimulator::handleGripAndCollisionsUsedVs(PDPositions& s, bool up
 		}
 		
 	}
-	else if(m_usingPODPosSubspaces){
+	else if(m_usePosSnapBases){
 		if(m_rhsInterpolation){
 			PROJ_DYN_PARALLEL_FOR
 				for (int v = 0; v < m_positionsUsedVs.rows(); v++) {

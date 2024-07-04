@@ -72,10 +72,20 @@ SOFTWARE.
 
 // Setting results storage macros
 // If storing frames in .png format (e.g. for numerical stability comparision)
-#define STORE_FRAMES_PNG true
+#define STORE_FRAMES_PNG false
 // If storing frames in .off format (e.g. for FOM snapshots collection, or error computation between different reduction methods)
-#define STORE_FRAMES_OFF true
+#define STORE_FRAMES_OFF false
 
+// characteristics, if we are using PCA bases for position space
+#define PCA_POSITION_WEIGHTING "_Volkwein_Standarized"
+#define PCA_POSITION_SUPPORT "_Local"
+#define PCA_POSITION_ALIGNMENT "_centered"
+#define PCA_POSITION_ORTHOGONAL "_nonOrthogonalized"
+
+#define SPLOCS_POSITION_WEIGHTING "_Volkwein_Standarized"
+#define SPLOCS_POSITION_SUPPORT "_Local"
+#define SPLOCS_POSITION_ALIGNMENT "_centered"
+#define SPLOCS_POSITION_ORTHOGONAL "_nonOrthogonalized"
 
 namespace PD {
 
@@ -119,9 +129,11 @@ namespace PD {
 		ProjDynSimulator(PDTriangles& triangles, 
 			PDPositions& initialPositions,
 			PDPositions& initialVelocities, PDScalar timeStep,
-			int numPODComponents = -1,
-			int numQDEIMComponents = -1,
-			int numPosSamples = -1, 
+			int numPCAComponents = -1,
+			std::string pca_directory = "",
+			int numSPLOCSComponents = -1,
+			std::string splocs_directory = "",
+			int numLBSPosSamples = -1, 
 			PDScalar baseFunctionRadius = 2.5,
 			int interpolBaseSize = 120,
 			PDScalar rhsInterpolWeightRadius = 2.,
@@ -335,18 +347,17 @@ namespace PD {
 		bool m_usingSkinSubspaces;
 		
 		bool m_usingPosSubspaces;   // if we do reduction for position (use subspaces for positions)
-
 		
-		
-		// POD stuff----------------
-		
+		// Snapshots bases stuff----------------
+		bool m_usePosSnapBases = false;
 		PDSparseMatrix m_massMatrixInv;
-		bool m_usingPODPosSubspaces;
-		int m_numPosPODModes;
-		bool isPODBasisOrthogonal;
-		bool isPODLocal;
-		bool isLocalPOD_Sparse;
-		
+		bool m_usingPODPosSubspaces = false;
+		int m_numPosPODModes = 0;
+		bool isPODBasisOrthogonal = false;
+		bool isPODLocal = false;
+		bool isLocalPOD_Sparse = false;
+		std::string m_PCABasesDir = "";
+
 		PDMatrix m_baseXFunctions;
 		PDMatrix m_baseXFunctionsTransposed;
 		PDMatrix m_baseXFunctionsSquared;
@@ -465,7 +476,9 @@ namespace PD {
 		PDScalar coeffX, coeffY, coeffZ, planeScalar;
 		bool m_planeBounceCorrection;
 		
+		int m_numPosSPLOCSModes = 0;
 		bool m_usingSPLOCSPosSubspaces = false;
+		std::string m_SPLOCSBasesDir = "";
 		bool podUsedVerticesOnly = false;
 		
 		PDMatrix m_usedVertexXInterpolatorRHSMatrix;
@@ -558,7 +571,7 @@ namespace PD {
 				
 		std::vector< unsigned int > m_samples;
 		PDMatrix m_baseFunctions;
-		PDMatrix m_basePODFunctionsTemporary;
+		PDMatrix m_snapshotsBasesTmp;
 		PDMatrix m_baseFunctionWeights;
 		PDMatrix m_baseFunctionsTransposed;
 		PDMatrix m_baseFunctionsSquared;
