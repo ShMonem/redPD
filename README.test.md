@@ -35,7 +35,7 @@
 	- `animSnapBases/results/bunny/_gravitationalFall/q_snapshots_h5/aligned_snapshots200outOf200_Frames_1_increment__alignedRigid.h5` stores `.h5` file for snapshots viualization.
 	- `animSnapBases/results/bunny/_gravitationalFall/q_bases/PCA_alignedRigid_Volkwein_Standarized_Local_nonOrthogonalized_Release/200outOf200_Frames_/1_increment_200_alignedRigid_bases` stores `.bin` files for bases
 7. Copy the latest folder containing the bases to `redPD/bases/bunny/_gravitationalFall/q_bases/PCA_alignedRigid_Volkwein_Standarized_Local_nonOrthogonalized_Release/200outOf200_Frames_/1_increment_200_alignedRigid_bases`
-  _ It contains `.bin` for different number of bases `in range (10, 200, 10)`, hence any of these `.bin` can be red by the <c++> code 
+  _ It contains `.bin` for different number of bases `in range (10, 200, 10)`, hence any of these `.bin` can be red by the `c++` code 
 8. In `redPD/src/main.cpp`, choose number of PCA bases used, for instance
 	```
 	numberPositionPCAModes = 200
