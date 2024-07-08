@@ -20,4 +20,4 @@ Scientific Advisors:
 
 Reproducibility:
 - This repository can be used to reproduce results in *Improved-Projective-Dynamics-Global-Using-Snapshots-based-Reduced-Bases* SIGGRAPH23 [1st place student competition award-winning paper](https://dl.acm.org/doi/10.1145/3588028.3603665).
-- Refer to <README.test.md> for details.
+- Refer to `README.test.md` for details.
