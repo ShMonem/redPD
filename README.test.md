@@ -16,7 +16,7 @@
   - Press key "1" to see some statistics about running time.
   - Two directories will be created
 	- `redPD/results/bunny/_gravitationalFall/position_snapshots/FOM/` stores <.off> snapshots files for FOM simulations.
-  	- `redPD/results/bunny/_gravitationalFall/png/FOM` stores <.png> fot the same snapshots.  
+  	- `redPD/results/bunny/_gravitationalFall/png/FOM` stores `.png` fot the same snapshots.  
   - The options of storing the above files can be changed using `macros` defined in `ProjDynSimolator.h`
 	```
 	// Setting results storage macros
