@@ -43,3 +43,41 @@
 9. Run simulation again 
 10. Notice time acceleration for the global step computation, when key "1" is pressed during simlations.
   - Note: `.png` and `.off` will also be stored for the reduced simulations as decribed in point 3.
+	
+
+Important notes:
+- Bases properties can be choosen sparately and adjusted in [`bases_config.json`](https://github.com/ShMonem/animSnapBases/blob/main/config/bases_config.json)
+- In order for the code to be able to find the right files for the right bases, the `macros` in `ProjDynSimolator.h` need to reflect the choices made in `bases_config.json` When the bases where computed.
+- For example, in `ProjDynSimolator.h` you see
+	```
+	// characteristics, if we are using PCA bases for position space
+	#define PCA_POSITION_WEIGHTING "_Volkwein_Standarized"
+	#define PCA_POSITION_SUPPORT "_Local"
+	#define PCA_POSITION_ALIGNMENT "_centered"
+	#define PCA_POSITION_ORTHOGONAL "_nonOrthogonalized"
+	```
+- As same choices where made in `bases_config.json`
+	```
+	
+		"snapshots":
+			{
+			...
+			"preAlignement": "_centered" ,
+			...
+			},
+		"vertexPos_bases":
+			{
+			...
+			"massWeighted": "_Volkwein",
+			"standarized": "_Standarized",
+			"orthogonalized": "_nonOrthogonalized",
+			...
+			"PCA":
+			{
+				"compute": true,
+				...
+				"supported": "_Local",
+				...
+			},
+	```
+- Names of directories where the `.c++` code looks for bases files can be changed in `main.cpp`
