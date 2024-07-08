@@ -375,33 +375,29 @@ int main()
 	std::string m_png_frames_directory = "../../../results/";
 	if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 	{
-		m_png_frames_directory = m_png_frames_directory + "png/";
+		m_png_frames_directory = m_png_frames_directory + meshName;
 		if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 		{
-			m_png_frames_directory = m_png_frames_directory + meshName;
+			m_png_frames_directory = m_png_frames_directory  +"/_gravitationalFall/";
 			if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 			{
+				m_png_frames_directory = m_png_frames_directory + "png/";
 				if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 				{
-					// change "/FOM/" to the name of your experiment if desired!
-					m_png_frames_directory = m_png_frames_directory + "/FOM/";
-					if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-					{
-						std::cout << "PNG directory created!: " << m_png_frames_directory << std::endl;
-					}
+					std::cout << "Creeating PNG directory !: " << m_png_frames_directory << std::endl;
 				}
 			}
 		}
 	}
 	else
 	{
-		std::cout << "Warning: PNG directory already exists, you might be over-writing!: " << m_png_frames_directory << std::endl;
+		std::cout << "Warning: PNG directory already exists!: " << m_png_frames_directory << std::endl;
 	}
 
 	// Directories where bases are stored
-	std::string pca_basesDir = "../../../bases/" + meshName + "/q_bases/PCA" + PCA_POSITION_ALIGNMENT  + PCA_POSITION_WEIGHTING +
+	std::string pca_basesDir = "../../../bases/" + meshName + "/_gravitationalFall/q_bases/PCA" + PCA_POSITION_ALIGNMENT  + PCA_POSITION_WEIGHTING +
 								PCA_POSITION_SUPPORT + PCA_POSITION_ORTHOGONAL + "_Release/200outOf200_Frames_/1_increment_200" + PCA_POSITION_ALIGNMENT + "_bases/using_F_200";
-	std::string splocs_basesDir = "../../../bases/" + meshName + "/q_bases/SPLOCS" + SPLOCS_POSITION_ALIGNMENT + SPLOCS_POSITION_WEIGHTING +
+	std::string splocs_basesDir = "../../../bases/" + meshName + "/_gravitationalFall/q_bases/SPLOCS" + SPLOCS_POSITION_ALIGNMENT + SPLOCS_POSITION_WEIGHTING +
 		SPLOCS_POSITION_SUPPORT + SPLOCS_POSITION_ORTHOGONAL + "_Release/200outOf200_Frames_/1_increment_200" + SPLOCS_POSITION_ALIGNMENT + "_bases/using_F_200";
 	std::string deim_basesDir;
 
@@ -439,7 +435,7 @@ int main()
 		// PCA reduction-methods parameters
 		//
 		// 1. For position subspaces, use only one methods of the following:
-		int numberPositionPCAModes = 100;				            // number of PCA bases/modes for position subspace construction (0. means the method is off)
+		int numberPositionPCAModes = 0;				            // number of PCA bases/modes for position subspace construction (0. means the method is off)
 		int numberPositionSPLOCSModes = 0;				        // number of SPLOCS bases/modes for position subspace construction (0. means the method is off)
 
 		// TODO: 2. For constaints reduction 
@@ -448,7 +444,7 @@ int main()
 		// LBS reduction parameters
 		// 
 		// 1. For position subspace
-		int numberSamplesForVertexPosSubspace = 0;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
+		int numberSamplesForLBSVertexPosSubspace = 0;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
 		double radiusMultiplierForVertexPosSubspace = 1.1;      // The larger this number, the larger the support of the base functions.
 		
 		// 2. For constraints subspace
@@ -462,6 +458,57 @@ int main()
 		double rhsRegularizationWeight = 0.;
 		double yTranslation = 3.;                               // in case of grip is activated
 
+
+		// The above parameters define name extension for the .png storage if desired
+		std::string simCase = "";          
+		if (numberPositionPCAModes > 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace == 0) {
+			simCase = simCase + "posPCA_" + std::to_string(numberPositionPCAModes);
+		}
+		else if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes > 0 && numberSamplesForLBSVertexPosSubspace == 0) {
+			simCase = simCase + "posSPLOCS_" + std::to_string(numberPositionSPLOCSModes);
+		}
+		else if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace > 0) {
+			simCase = simCase + "posLBS_" + std::to_string(numberSamplesForLBSVertexPosSubspace);
+		}
+		else if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace == 0) {
+			simCase = simCase + "noPosREduction_";
+		}
+		else {
+			std::cout << "Fatal ERORRR! simulation case unknows. Check position reduction parameters passed to SimVeiwer!" << std::endl;
+			
+		}
+
+		if (numberSampledConstraints > 0 && dimensionOfConstraintProjectionsSubspace > 0  && numberNonlinearDEIMModes == 0)
+		{
+			simCase = simCase + "_constrLBS_" + std::to_string(dimensionOfConstraintProjectionsSubspace);
+		}
+		else if (dimensionOfConstraintProjectionsSubspace == 0 && numberNonlinearDEIMModes > 0)
+		{
+			simCase = simCase + "_constrDEIM_" + std::to_string(numberNonlinearDEIMModes);
+		}
+		else {
+			simCase = simCase + "_noConstrReduction";
+		}
+
+		if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace == 0 \
+			&& dimensionOfConstraintProjectionsSubspace == 0 && numberNonlinearDEIMModes == 0)
+		{
+			simCase = "FOM/";
+		}
+		else {
+			simCase = simCase + "/";
+		}
+
+		m_png_frames_directory = m_png_frames_directory + simCase;
+		if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+		{
+			std::cout << "PNG directory created!: " << m_png_frames_directory << std::endl;
+		}
+		else {
+			std::cout << "PNG directory for specific case already exsits, will be over-written!: " << m_png_frames_directory << std::endl;
+		}
+
+
 		// Start a viewer that uses a simple plugin to draw the simulated mesh
 		// (it does numIterations local/global steps to simulate the next timestep
 		// before drawing the mesh).
@@ -469,7 +516,7 @@ int main()
 		SimViewer simViewer(verts, faces, velos, meshURL, m_png_frames_directory, numIterations, timeStep,
 			                numberPositionPCAModes, pca_basesDir,
 							numberPositionSPLOCSModes, splocs_basesDir,
-							numberSamplesForVertexPosSubspace,
+							numberSamplesForLBSVertexPosSubspace,
 							radiusMultiplierForVertexPosSubspace,
 							dimensionOfConstraintProjectionsSubspace,
 							radiusMultiplierForConstraintProjectionsSubspace,

@@ -108,7 +108,7 @@ ProjDynSimulator::ProjDynSimulator
 							// true: stack interpolationBlocks from x/y/z and use LS to find the reduced constraints projections
 	
 	// Full order simulations (where snapshots might be collected)
-	m_usingPosSubspaces(m_numPosPODModes+numSamplesPosSubspace > 0),  
+	m_usingPosSubspaces(numPosPODModes > 0 || numSPLOCSModes > 0 || numSamplesPosSubspace > 0),
 	recordingSTpSnapshots(false), 
 	recordingPSnapshots(false),
 	// note recording happens only for one constraint at a time
@@ -280,13 +280,17 @@ ProjDynSimulator::ProjDynSimulator
 	m_meshSnapshotsDirectory = "../../../results/";
 	if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 	{
-		m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "position_snapshots/";
+		m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + m_meshName + "/";
 		if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 		{
-			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + m_meshName + "/";
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory +  "_gravitationalFall/"; 
 			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 			{
-				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "position_snapshots/";
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
 			}
 		}
 	}
@@ -3704,7 +3708,7 @@ void ProjDynSimulator::step(int numIterations)
 		//************************************
 		m_globalStepStopWatch.startStopWatch();
 		// Solve, for x, y and z in parallel	
-		if (m_usingPosSubspaces) {
+		if (m_usingPosSubspaces){
 			if(m_usingSkinSubspaces && !m_usePosSnapBases){
 				// Only subsspace positions are updated, the full positions are only evaluated
 				// where the constraints need them.
