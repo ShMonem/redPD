@@ -474,8 +474,7 @@ int main()
 			simCase = simCase + "noPosREduction_";
 		}
 		else {
-			std::cout << "Fatal ERORRR! simulation case unknows. Check position reduction parameters passed to SimVeiwer!" << std::endl;
-			
+			std::cout << "Fatal ERORRR! simulation case unknows. Check position reduction parameters passed to SimVeiwer!" << std::endl;	
 		}
 
 		if (numberSampledConstraints > 0 && dimensionOfConstraintProjectionsSubspace > 0  && numberNonlinearDEIMModes == 0)

@@ -72,9 +72,9 @@ SOFTWARE.
 
 // Setting results storage macros
 // If storing frames in .png format (e.g. for numerical stability comparision)
-#define STORE_FRAMES_PNG true
+#define STORE_FRAMES_PNG false
 // If storing frames in .off format (e.g. for FOM snapshots collection, or error computation between different reduction methods)
-#define STORE_FRAMES_OFF true
+#define STORE_FRAMES_OFF false
 
 // characteristics, if we are using PCA bases for position space
 #define PCA_POSITION_WEIGHTING "_Volkwein_Standarized"
