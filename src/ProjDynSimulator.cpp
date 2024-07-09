@@ -1365,14 +1365,13 @@ void PD::ProjDynSimulator::addTriangleStrain(PDScalar weight, PDScalar rangeMin,
 
 void PD::ProjDynSimulator::addTetStrain(PDScalar weight, PDScalar rangeMin, PDScalar rangeMax)
 {
-	//_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+
 	if (m_hasTetrahedrons) {  // add tetcConstrainttProj at each tet
 		for (int t = 0; t < m_numTets; t++) {
 			PDScalar avgX = 1; // (m_positions(m_tetrahedrons(t, 0), 0) + m_positions(m_tetrahedrons(t, 1), 0) + m_positions(m_tetrahedrons(t, 2), 0) + m_positions(m_tetrahedrons(t, 3), 0)) / 4.;
 			TetStrainConstraint* sc = new TetStrainConstraint(m_numVertices, t, m_tetrahedrons, m_positions, rangeMin, rangeMax, (weight * m_normalization) / (avgX < 0 ? 10. : 1.));
 			addConstraint(sc);
 			m_tetStrainConstraints.push_back(sc);
-			delete sc;
 			
 		}
 	}
