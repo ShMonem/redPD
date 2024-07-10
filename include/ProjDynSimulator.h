@@ -151,6 +151,9 @@ namespace PD {
 		int getNumVertices();
 		void addConstraint(ProjDynConstraint* c, bool alwaysAdd = false);
 		void setup();
+		void full_lhsSetup();
+		void ProjDynSimulator::lbs_lhsSetup();
+		void ProjDynSimulator::snapBases_lhsSetup();
 		void setExternalForces(PDPositions fExt);
 		void addGravity(PDScalar g);
 		void addFloor(int floorCoordinate, PDScalar floorHeight, PDScalar floorCollisionWeight);

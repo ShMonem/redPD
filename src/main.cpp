@@ -34,6 +34,18 @@ SOFTWARE.
 #include <igl/opengl/glfw/ViewerPlugin.h>
 #include <igl/png/writePNG.h>
 
+#include <igl/circulation.h>
+#include <igl/collapse_edge.h>
+#include <igl/edge_flaps.h>
+#include <igl/decimate.h>
+#include <igl/shortest_edge_and_midpoint.h>
+#include <igl/parallel_for.h>
+#include <igl/read_triangle_mesh.h>
+#include <igl/opengl/glfw/Viewer.h>
+#include <Eigen/Core>
+#include <iostream>
+#include <set>
+
 /* HRPD include files */
 #include "ProjDynTypeDef.h"
 #include "ProjDynSimulator.h"
@@ -367,7 +379,8 @@ int main()
 {
 	// Depending on whatever your default working directory is and wherever this mesh
 	// file is, you will need to change this URL
-	std::string meshURL = "bunny.obj";
+	std::string meshURL = "armadillo.obj";
+
 	std::string meshName(PD::getMeshName(meshURL));
 	// create the directory to store frames as .png
 	// note: photoes are stored only if STORE_FRAMES_PNG is sat to true.
@@ -409,10 +422,13 @@ int main()
 
 	Eigen::MatrixXd verts2;
 	Eigen::MatrixXi faces2;
+	Eigen::VectorXi J;
+	
 
 	if (igl::readOBJ(meshURL, verts2, faces2))
 	{
-
+		int maxAllowFaces = 5000;
+		igl::decimate(verts2, faces2, maxAllowFaces, verts2, faces2, J);
 		// here we convert to PD types:
 		PD::PDPositions verts = PD::PDPositions(verts2);
 		PD::PDTriangles faces = PD::PDTriangles(faces2);
