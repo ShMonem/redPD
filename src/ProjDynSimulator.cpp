@@ -2061,6 +2061,47 @@ void ProjDynSimulator::setup() {
 			// TODO: We need to project the current positions to the subspace, which can be done through matrix-vector product 
 			// because in this case matrices are assumed to be orthonormal.
 			
+
+			if (!isPosSnapBasesOrtho) {
+				m_basesFunctionsSquared[0] = m_basesFunctionsT[0] * m_massMatrix * m_basesFunctions[0];
+				m_basesFunctionsSquared[1] = m_basesFunctionsT[1] * m_massMatrix * m_basesFunctions[1];
+				m_basesFunctionsSquared[2] = m_basesFunctionsT[2] * m_massMatrix * m_basesFunctions[2];
+
+#pragma omp parallel
+#pragma omp single nowait
+				{
+#pragma omp task
+					m_subspaceXSolver.compute(m_basesFunctionsSquared[0]);
+#pragma omp task
+					m_subspaceYSolver.compute(m_basesFunctionsSquared[1]);
+#pragma omp task
+					m_subspaceZSolver.compute(m_basesFunctionsSquared[2]);
+				}
+
+				if (m_subspaceXSolver.info() != Eigen::Success || m_subspaceYSolver.info() != Eigen::Success || m_subspaceZSolver.info() != Eigen::Success) {
+					// solving failed
+					std::cout << "FATAL ERROR! subspaceSolvers for nonOrthogonal basis failed" << std::endl;
+					return;
+				}
+				if (m_useSparseMatricesForSubspace) {
+					PDSparseMatrix m_baseXFunctionsSquaredSparse, m_baseYFunctionsSquaredSparse, m_baseZFunctionsSquaredSparse;
+					m_baseXFunctionsSquaredSparse = m_basesFunctionsTSparse[0] * m_massMatrix * m_basesFunctionsSparse[0];
+					m_baseYFunctionsSquaredSparse = m_basesFunctionsTSparse[1] * m_massMatrix * m_basesFunctionsSparse[1];
+					m_baseZFunctionsSquaredSparse = m_basesFunctionsTSparse[2] * m_massMatrix * m_basesFunctionsSparse[2];
+
+#pragma omp parallel
+#pragma omp single nowait
+					{
+#pragma omp task
+						m_subspaceXSparseSolver.compute(m_baseXFunctionsSquaredSparse);
+#pragma omp task
+						m_subspaceYSparseSolver.compute(m_baseYFunctionsSquaredSparse);
+#pragma omp task
+						m_subspaceZSparseSolver.compute(m_baseZFunctionsSquaredSparse);
+					}
+				}
+			}
+
 			m_positionsSubspace.setZero(m_basesFunctions[0].cols(), 3);
 			m_velocitiesSubspace.setZero(m_basesFunctions[0].cols(), 3);
 
