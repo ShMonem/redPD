@@ -77,15 +77,12 @@ SOFTWARE.
 #define STORE_FRAMES_OFF false
 
 // characteristics, if we are using PCA bases for position space
-#define PCA_POSITION_WEIGHTING "_Volkwein_Standarized"
-#define PCA_POSITION_SUPPORT "_Local"
-#define PCA_POSITION_ALIGNMENT "_centered"
-#define PCA_POSITION_ORTHOGONAL "_nonOrthogonalized"
+#define SNAPBASES_POSITION_WEIGHTING "_Volkwein_Standarized"
+#define SNAPBASES_POSITION_SUPPORT "_Local"
+#define SNAPBASES_POSITION_ALIGNMENT "_centered"
+#define SNAPBASES_POSITION_ORTHOGONAL "_nonOrthogonalized"
 
-#define SPLOCS_POSITION_WEIGHTING "_Volkwein_Standarized"
-#define SPLOCS_POSITION_SUPPORT "_Local"
-#define SPLOCS_POSITION_ALIGNMENT "_centered"
-#define SPLOCS_POSITION_ORTHOGONAL "_nonOrthogonalized"
+#define SNAPBASES_POSITION_SPARSE "_nonSparse"
 
 namespace PD {
 
@@ -152,8 +149,9 @@ namespace PD {
 		void addConstraint(ProjDynConstraint* c, bool alwaysAdd = false);
 		void setup();
 		void full_lhsSetup();
-		void ProjDynSimulator::lbs_lhsSetup();
-		void ProjDynSimulator::snapBases_lhsSetup();
+		void lbs_lhsSetup();
+		void snapBases_lhsSetup();
+
 		void setExternalForces(PDPositions fExt);
 		void addGravity(PDScalar g);
 		void addFloor(int floorCoordinate, PDScalar floorHeight, PDScalar floorCollisionWeight);
@@ -351,29 +349,29 @@ namespace PD {
 		
 		bool m_usingPosSubspaces;   // if we do reduction for position (use subspaces for positions)
 		
-		// Snapshots bases stuff----------------
-		bool m_usePosSnapBases = false;
+		// Snapshots bases parameters 
+		
 		PDSparseMatrix m_massMatrixInv;
 		bool m_usingPODPosSubspaces = false;
+		bool m_usingSPLOCSPosSubspaces = false;
+		bool m_usePosSnapBases = false;
 		int m_numPosPODModes = 0;
-		bool isPODBasisOrthogonal = false;
-		bool isPODLocal = false;
-		bool isLocalPOD_Sparse = false;
-		std::string m_PCABasesDir = "";
+		int m_numPosSPLOCSModes = 0;
+		int m_numPosSnapBasesModes = 0;
 
-		PDMatrix m_baseXFunctions;
-		PDMatrix m_baseXFunctionsTransposed;
-		PDMatrix m_baseXFunctionsSquared;
 		
-		PDMatrix m_baseYFunctions;
-		PDMatrix m_baseYFunctionsTransposed;
-		PDMatrix m_baseYFunctionsSquared;
+		std::string m_PCABasesDir = "";
+		std::string m_SPLOCSBasesDir = "";
+
+		bool isPosSnapBasesOrtho = false;
+		bool isPosSnapBasesLocal = false;
+		bool isPosSnapBasesSparse = false;
 		
-		PDMatrix m_baseZFunctions;
-		PDMatrix m_baseZFunctionsTransposed;
-		PDMatrix m_baseZFunctionsSquared; 
+		std::vector<PDMatrix> m_basesFunctions;
+		std::vector<PDMatrixRM> m_basesFunctionsT;
+		std::vector<PDMatrix> m_basesFunctionsSquared;
 		
-		void finalizePODBaseFunctions(); 
+		void finalizeSnapBasesFunctions(); 
 		
 		Eigen::LLT<PDMatrix> m_subspaceXSolver;
 		Eigen::LLT<PDMatrix> m_subspaceYSolver;
@@ -390,53 +388,29 @@ namespace PD {
 		void projectToPODSubspace(PDPositions& b, PDPositions& x, bool isOrthogonal);
 		void projectToSparsePODSubspace(PDPositions& subPos, PDPositions& fullPos, bool isBasisOrthogonal);
 		
-		PDSparseMatrixRM m_baseXFunctionsSparse;
-		PDSparseMatrix m_baseXFunctionsTransposedSparse;
+		std::vector<PDSparseMatrix> m_basesFunctionsSparse;
+		std::vector<PDSparseMatrixRM> m_basesFunctionsTSparse;
 		
-		PDSparseMatrixRM m_baseYFunctionsSparse;
-		PDSparseMatrix m_baseYFunctionsTransposedSparse;
+		std::vector<PDMatrix> m_projectedLHS_mom;
+		std::vector<PDMatrix> m_projectedLHS_inner;
+		std::vector<PDMatrix> m_projectedRHS_mom;
+		std::vector<PDMatrix> m_projectedRHS_mom_pre;
+
+		std::vector<PDMatrix> m_projectedlhsMatrix;
+		std::vector<PDSparseMatrix> m_projectedlhsMatrixSparse;
+
+		std::vector<PDSparseMatrix> m_projectedRHS_momSparse;
+		std::vector<PDSparseMatrix> m_projectedRHS_mom_preSparse;
+
 		
-		PDSparseMatrixRM m_baseZFunctionsSparse;
-		PDSparseMatrix m_baseZFunctionsTransposedSparse;
 		
-		
-		PDMatrix m_subspaceXLHS_mom;
-		PDMatrix m_subspaceXLHS_inner;
-		PDMatrix m_rhsXFirstTermMatrix;
-		PDMatrix m_rhsXFirstTermMatrixPre;
-		
-		PDSparseMatrix m_subspaceXLHS_momSparse;
-		PDSparseMatrix m_subspaceXLHS_innerSparse;
-		PDSparseMatrix m_rhsXFirstTermMatrixSparse;
 		PDSparseMatrix m_rhsXFirstTermMatrixPreSparse;
 		
-		PDMatrix m_subspaceYLHS_mom;
-		PDMatrix m_subspaceYLHS_inner;
-		PDMatrix m_rhsYFirstTermMatrix;
-		PDMatrix m_rhsYFirstTermMatrixPre;
 		
-		PDSparseMatrix m_subspaceYLHS_momSparse;
-		PDSparseMatrix m_subspaceYLHS_innerSparse;
-		PDSparseMatrix m_rhsYFirstTermMatrixSparse;
 		PDSparseMatrix m_rhsYFirstTermMatrixPreSparse;
-		
-		PDMatrix m_subspaceZLHS_mom;
-		PDMatrix m_subspaceZLHS_inner;
-		PDMatrix m_rhsZFirstTermMatrix;
-		PDMatrix m_rhsZFirstTermMatrixPre;
-		
-		PDSparseMatrix m_subspaceZLHS_momSparse;
-		PDSparseMatrix m_subspaceZLHS_innerSparse;
-		PDSparseMatrix m_rhsZFirstTermMatrixSparse;
 		PDSparseMatrix m_rhsZFirstTermMatrixPreSparse;
 		
-		PDPositions rhsX2;
-		PDPositions rhsY2;
-		PDPositions rhsZ2;
 		
-		PDMatrix m_lhsXMatrixSampled;
-		PDMatrix m_lhsYMatrixSampled;
-		PDMatrix m_lhsZMatrixSampled;
 		
 		PDSparseMatrix m_lhsXMatrixSampledSparse;
 		PDSparseMatrix m_lhsYMatrixSampledSparse;
@@ -479,9 +453,7 @@ namespace PD {
 		PDScalar coeffX, coeffY, coeffZ, planeScalar;
 		bool m_planeBounceCorrection;
 		
-		int m_numPosSPLOCSModes = 0;
-		bool m_usingSPLOCSPosSubspaces = false;
-		std::string m_SPLOCSBasesDir = "";
+		
 		bool podUsedVerticesOnly = false;
 		
 		PDMatrix m_usedVertexXInterpolatorRHSMatrix;

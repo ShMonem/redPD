@@ -408,10 +408,10 @@ int main()
 	}
 
 	// Directories where bases are stored
-	std::string pca_basesDir = "../../../bases/" + meshName + "/_gravitationalFall/q_bases/PCA" + PCA_POSITION_ALIGNMENT  + PCA_POSITION_WEIGHTING +
-								PCA_POSITION_SUPPORT + PCA_POSITION_ORTHOGONAL + "_Release/200outOf200_Frames_/1_increment_200" + PCA_POSITION_ALIGNMENT + "_bases/using_F_200";
-	std::string splocs_basesDir = "../../../bases/" + meshName + "/_gravitationalFall/q_bases/SPLOCS" + SPLOCS_POSITION_ALIGNMENT + SPLOCS_POSITION_WEIGHTING +
-		SPLOCS_POSITION_SUPPORT + SPLOCS_POSITION_ORTHOGONAL + "_Release/200outOf200_Frames_/1_increment_200" + SPLOCS_POSITION_ALIGNMENT + "_bases/using_F_200";
+	std::string pca_basesDir = "../../../bases/" + meshName + "/_gravitationalFall/q_bases/PCA" + SNAPBASES_POSITION_ALIGNMENT  + SNAPBASES_POSITION_WEIGHTING +
+								SNAPBASES_POSITION_SUPPORT + SNAPBASES_POSITION_ORTHOGONAL + "_Release/200outOf200_Frames_/1_increment_200" + SNAPBASES_POSITION_ALIGNMENT + "_bases/using_F_200";
+	std::string splocs_basesDir = "../../../bases/" + meshName + "/_gravitationalFall/q_bases/SPLOCS" + SNAPBASES_POSITION_ALIGNMENT + SNAPBASES_POSITION_WEIGHTING +
+		SNAPBASES_POSITION_SUPPORT + SNAPBASES_POSITION_ORTHOGONAL + "_Release/200outOf200_Frames_/1_increment_200" + SNAPBASES_POSITION_ALIGNMENT + "_bases/using_F_200";
 	std::string deim_basesDir;
 
 	//  Load a mesh using IGL
