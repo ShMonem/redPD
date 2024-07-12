@@ -93,13 +93,13 @@ ProjDynSimulator *initSimulator(PD::PDPositions verts, PD::PDTriangles faces, PD
 	// LBS reduction parameters
 	// 
 	// 1. For position subspace
-	int numberSamplesForLBSVertexPosSubspace = 80;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
+	int numberSamplesForLBSVertexPosSubspace = 0;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
 	double radiusMultiplierForVertexPosSubspace = 1.1;      // The larger this number, the larger the support of the base functions.
 
 	// 2. For constraints subspace
-	int dimensionOfConstraintProjectionsSubspace = 120;       // 120; // The constraint projections subspace will be constructed to be twice that size and then condensed via an SVD
+	int dimensionOfConstraintProjectionsSubspace = 0;       // 120; // The constraint projections subspace will be constructed to be twice that size and then condensed via an SVD
 	double radiusMultiplierForConstraintProjectionsSubspace = 2.2;
-	int numberSampledConstraints = 1000;                      // 1000; // Number of constraints that will be evaluated each iteration
+	int numberSampledConstraints = 0;                      // 1000; // Number of constraints that will be evaluated each iteration
 	//  this number needs to be zero in order to do no reduction for constraint projection
 	double massPerUnitArea = 2.;
 	double dampingAlpha = 0;
@@ -215,6 +215,7 @@ public:
 	int m_numIterations;
 	int m_numVertices;
 	int numberOfFrame = 0;
+
 	double m_timeStep;
 	int m_numberPositionPCAModes;
 	std::string m_pca_basesDir;
@@ -231,7 +232,7 @@ public:
 	double m_rhsRegularizationWeight;
 	double m_yTranslation;
 
-	SimViewer(PDPositions& verts, PDTriangles& faces, PDPositions& velos, std::string url) :
+	SimViewer(PDPositions& verts, PDTriangles& faces, PDPositions& velos, std::string url, int numIterations) :
 		m_verts(verts),
 		m_faces(faces),
 		m_velos(velos),
@@ -242,7 +243,7 @@ public:
 
 	{
 		m_sim = initSimulator(m_verts, m_faces, m_velos, m_url);
-
+		m_numIterations = numIterations;
 		m_numVertices = m_verts.rows();
 
 		/* The following is specific to the armadillo.obj mesh, it's a list of vertices on the
@@ -442,7 +443,8 @@ int main()
 		// (it does numIterations local/global steps to simulate the next timestep
 		// before drawing the mesh).
 		
-		SimViewer simViewer(verts, faces, velos, meshURL);
+		int numIterations = 10;
+		SimViewer simViewer(verts, faces, velos, meshURL, numIterations);
 
 		// Eigen::MatrixXd verts3 = Eigen::MatrixXd(verts);
 		// Eigen::MatrixXi faces3 = Eigen::MatrixXi(faces);
