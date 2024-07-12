@@ -349,7 +349,7 @@ namespace PD {
 		
 		bool m_usingPosSubspaces;   // if we do reduction for position (use subspaces for positions)
 		
-		// Snapshots bases parameters 
+		/* Snapshots bases parameters */
 		
 		PDSparseMatrix m_massMatrixInv;
 		bool m_usingPODPosSubspaces = false;
@@ -370,7 +370,22 @@ namespace PD {
 		std::vector<PDMatrix> m_basesFunctions;
 		std::vector<PDMatrixRM> m_basesFunctionsT;
 		std::vector<PDMatrix> m_basesFunctionsSquared;
-		
+		std::vector<PDSparseMatrix> m_basesFunctionsSparse;
+		std::vector<PDSparseMatrixRM> m_basesFunctionsTSparse;
+
+		std::vector<PDMatrix> m_projectedLHS_mom;
+		std::vector<PDMatrix> m_projectedLHS_inner;
+		std::vector<PDMatrix> m_projectedRHS_mom;
+		std::vector<PDMatrix> m_projectedRHS_mom_pre;
+
+		std::vector<PDMatrix> m_projectedlhsMatrix;
+		std::vector<PDSparseMatrix> m_projectedlhsMatrixSparse;
+
+		std::vector<PDSparseMatrix> m_projectedRHS_momSparse;
+		std::vector<PDSparseMatrix> m_projectedRHS_mom_preSparse;
+
+
+
 		void finalizeSnapBasesFunctions(); 
 		
 		Eigen::LLT<PDMatrix> m_subspaceXSolver;
@@ -387,22 +402,6 @@ namespace PD {
 		
 		void projectToPODSubspace(PDPositions& b, PDPositions& x, bool isOrthogonal);
 		void projectToSparsePODSubspace(PDPositions& subPos, PDPositions& fullPos, bool isBasisOrthogonal);
-		
-		std::vector<PDSparseMatrix> m_basesFunctionsSparse;
-		std::vector<PDSparseMatrixRM> m_basesFunctionsTSparse;
-		
-		std::vector<PDMatrix> m_projectedLHS_mom;
-		std::vector<PDMatrix> m_projectedLHS_inner;
-		std::vector<PDMatrix> m_projectedRHS_mom;
-		std::vector<PDMatrix> m_projectedRHS_mom_pre;
-
-		std::vector<PDMatrix> m_projectedlhsMatrix;
-		std::vector<PDSparseMatrix> m_projectedlhsMatrixSparse;
-
-		std::vector<PDSparseMatrix> m_projectedRHS_momSparse;
-		std::vector<PDSparseMatrix> m_projectedRHS_mom_preSparse;
-
-		
 		
 		PDSparseMatrix m_rhsXFirstTermMatrixPreSparse;
 		

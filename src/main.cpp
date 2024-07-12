@@ -379,8 +379,8 @@ int main()
 {
 	// Depending on whatever your default working directory is and wherever this mesh
 	// file is, you will need to change this URL
-	std::string meshURL = "armadillo.obj";
-
+	//std::string meshURL = "armadillo.obj";
+	std::string meshURL = "bunny.obj";
 	std::string meshName(PD::getMeshName(meshURL));
 	// create the directory to store frames as .png
 	// note: photoes are stored only if STORE_FRAMES_PNG is sat to true.
@@ -428,7 +428,7 @@ int main()
 	if (igl::readOBJ(meshURL, verts2, faces2))
 	{
 		int maxAllowFaces = 5000;
-		igl::decimate(verts2, faces2, maxAllowFaces, verts2, faces2, J);
+		//igl::decimate(verts2, faces2, maxAllowFaces, verts2, faces2, J);
 		// here we convert to PD types:
 		PD::PDPositions verts = PD::PDPositions(verts2);
 		PD::PDTriangles faces = PD::PDTriangles(faces2);
@@ -460,7 +460,7 @@ int main()
 		// LBS reduction parameters
 		// 
 		// 1. For position subspace
-		int numberSamplesForLBSVertexPosSubspace = 0;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
+		int numberSamplesForLBSVertexPosSubspace = 80;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
 		double radiusMultiplierForVertexPosSubspace = 1.1;      // The larger this number, the larger the support of the base functions.
 		
 		// 2. For constraints subspace

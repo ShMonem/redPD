@@ -719,22 +719,20 @@ void PD::ProjDynSimulator::updatePositionsSampling(PDPositions& fullPos, PDPosit
 
 void PD::ProjDynSimulator::updatePODPositionsSampling(PDPositions& fullPos, PDPositions& subPos, bool usedVerticesOnly)
 {
-	if (!usedVerticesOnly) {     
-	
-		#pragma omp parallel
-		#pragma omp single nowait
-		{
-		#pragma omp task
-			fullPos.col(0) = m_basesFunctions[0] * subPos.col(0);
-		#pragma omp task
-			fullPos.col(1) = m_basesFunctions[1] * subPos.col(1);
-		#pragma omp task
-			fullPos.col(2) = m_basesFunctions[2] * subPos.col(2);
-		} 	
-	}
-
-	else {  // usedVerticesOnly
+	if (usedVerticesOnly) { 
 		evaluatePositionsAtUsedVertices(fullPos, subPos);
+	}
+	else {  
+#pragma omp parallel
+#pragma omp single nowait
+		{
+#pragma omp task
+			fullPos.col(0) = m_basesFunctions[0] * subPos.col(0);
+#pragma omp task
+			fullPos.col(1) = m_basesFunctions[1] * subPos.col(1);
+#pragma omp task
+			fullPos.col(2) = m_basesFunctions[2] * subPos.col(2);
+		}
 	}
 }
 
@@ -1894,6 +1892,10 @@ void ProjDynSimulator::setup() {
 			// m_numPosPODModes+1: because we add the original mesh as a component too
 			m_basesFunctions.resize(3);
 			m_basesFunctionsT.resize(3);
+			m_basesFunctionsSquared.resize(3);
+			m_basesFunctionsSparse.resize(3);
+			m_basesFunctionsTSparse.resize(3);
+
 
 			m_basesFunctions[0].setZero(m_snapshotsBasesTmp.rows(), m_numPosPODModes+1);
 			m_basesFunctions[1].setZero(m_snapshotsBasesTmp.rows(), m_numPosPODModes+1);
@@ -2056,12 +2058,10 @@ void ProjDynSimulator::setup() {
 		}
 		else if(m_usePosSnapBases && !m_usingSkinSubspaces){
 			
-			m_basesFunctionsSquared.resize(3);
 			std::cout << "Prepapring subSpcaces and POD Subspaces solvers.... " << std::endl;
 			// TODO: We need to project the current positions to the subspace, which can be done through matrix-vector product 
 			// because in this case matrices are assumed to be orthonormal.
 			
-
 			if (!isPosSnapBasesOrtho) {
 				m_basesFunctionsSquared[0] = m_basesFunctionsT[0] * m_massMatrix * m_basesFunctions[0];
 				m_basesFunctionsSquared[1] = m_basesFunctionsT[1] * m_massMatrix * m_basesFunctions[1];
@@ -2311,7 +2311,16 @@ void ProjDynSimulator::setup() {
 		
 	}
 	else if (m_usePosSnapBases && !m_usingSkinSubspaces) {
-	
+		m_projectedLHS_mom.resize(3);
+		m_projectedLHS_inner.resize(3);
+		m_projectedRHS_mom.resize(3);
+		m_projectedRHS_mom_pre.resize(3);
+		m_projectedlhsMatrix.resize(3);
+		m_projectedlhsMatrixSparse.resize(3);
+		m_projectedRHS_momSparse.resize(3);
+		m_projectedRHS_mom_preSparse.resize(3);
+
+
 		
 		std::cout << "Projecting the momentum term RHS matrices to POD subspaces, for the global system ..." << std::endl;
 		
@@ -2494,7 +2503,6 @@ void ProjDynSimulator::setup() {
 				#pragma omp task
 					m_projectedLHS_inner[1] = m_basesFunctionsT[1] * conMat * m_basesFunctions[1];  
 				#pragma omp task
-
 					m_projectedLHS_inner[2] = m_basesFunctionsT[2] * conMat * m_basesFunctions[2];  	
 				}
 				if (m_projectedLHS_inner[0].hasNaN() || m_projectedLHS_inner[1].hasNaN() || m_projectedLHS_inner[2].hasNaN() ) {
@@ -2649,8 +2657,8 @@ void ProjDynSimulator::setup() {
 			}
 
 			m_projectedLHS_inner[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-			m_projectedLHS_inner[1].setZero(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
-			m_projectedLHS_inner[2].setZero(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());
+			m_projectedLHS_inner[1].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			m_projectedLHS_inner[2].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
 
 			
 			std::cout << "Projecting the LHS matrices to the subspace..." << std::endl;
@@ -2690,6 +2698,7 @@ void ProjDynSimulator::setup() {
 			#pragma omp single nowait
 			{
 			#pragma omp task
+
 				m_projectedlhsMatrix[0] =   m_projectedLHS_mom[0] + m_projectedLHS_inner[0] ; 
 			#pragma omp task
 				m_projectedlhsMatrix[1] =   m_projectedLHS_mom[1] + m_projectedLHS_inner[1] ;  
