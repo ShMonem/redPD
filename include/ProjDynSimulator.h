@@ -371,7 +371,7 @@ namespace PD {
 		
 		std::vector<PDMatrix> m_basesFunctions;
 		std::vector<PDMatrixRM> m_basesFunctionsT;
-		std::vector<PDMatrix> m_basesFunctionsSquared;
+		
 		std::vector<PDSparseMatrix> m_basesFunctionsSparse;
 		std::vector<PDSparseMatrixRM> m_basesFunctionsTSparse;
 

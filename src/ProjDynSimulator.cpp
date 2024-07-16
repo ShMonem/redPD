@@ -323,7 +323,6 @@ void ProjDynSimulator::finalizeSnapBasesFunctions() {
 
 PDPositions& ProjDynSimulator::getPositions()   // for simulation rendering in doubleHRPD (main.cpp)
 {
-	
 	return m_positions;
 }
 
@@ -399,12 +398,6 @@ void PD::ProjDynSimulator::projectToSubspace(PDPositions& b, PDPositions& x, boo
 void PD::ProjDynSimulator::projectToPODSubspace(PDPositions& subPos, PDPositions& fullPos, bool isBasisOrthogonal)
 {
 	if(!isBasisOrthogonal){
-		
-		PDPositions rhs;
-		rhs.setZero(m_basesFunctionsT[0].rows() , 3);
-		rhs.col(0) = m_basesFunctionsT[0] * m_massMatrix * fullPos.col(0);
-		rhs.col(1) = m_basesFunctionsT[1] * m_massMatrix * fullPos.col(1);
-		rhs.col(2) = m_basesFunctionsT[2] * m_massMatrix * fullPos.col(2);
 		subPos.resize(m_basesFunctionsT[0].rows(), 3);
 		
 		// projecting in parallel 
@@ -412,11 +405,11 @@ void PD::ProjDynSimulator::projectToPODSubspace(PDPositions& subPos, PDPositions
 		#pragma omp single nowait
 		{
 		#pragma omp task
-		    subPos.col(0) = m_subspaceXSolver.solve(rhs.col(0));
+		    subPos.col(0) = m_subspaceXSolver.solve(m_basesFunctionsT[0] * m_massMatrix * fullPos.col(0));
 		#pragma omp task
-		    subPos.col(1) = m_subspaceYSolver.solve(rhs.col(1));
+		    subPos.col(1) = m_subspaceYSolver.solve(m_basesFunctionsT[1] * m_massMatrix * fullPos.col(1));
 		#pragma omp task
-		    subPos.col(2) = m_subspaceZSolver.solve(rhs.col(2));
+		    subPos.col(2) = m_subspaceZSolver.solve(m_basesFunctionsT[2] * m_massMatrix * fullPos.col(2));
 		}
 		
 		if(m_subspaceXSolver.info()!= Eigen::Success || m_subspaceYSolver.info()!= Eigen::Success  || m_subspaceZSolver.info()!= Eigen::Success  ) {
@@ -430,9 +423,10 @@ void PD::ProjDynSimulator::projectToPODSubspace(PDPositions& subPos, PDPositions
 		//TODO: orthogonal case
 		// U.T M -u q_sub = U.T M q_full
 		// in the orthogonal case U.T M U = I
-		 subPos.col(0) = m_basesFunctionsT[0] * m_massMatrix * fullPos.col(0);
-		 subPos.col(1) = m_basesFunctionsT[1] * m_massMatrix * fullPos.col(1);
-		 subPos.col(2) = m_basesFunctionsT[2] * m_massMatrix * fullPos.col(2);
+		PROJ_DYN_PARALLEL_FOR
+			for (unsigned int dim = 0; dim < 3; dim++) {
+				subPos.col(dim) = m_basesFunctionsT[dim] * m_massMatrix * fullPos.col(dim);
+			}
 	}
 }
 
@@ -440,11 +434,6 @@ void PD::ProjDynSimulator::projectToSparsePODSubspace(PDPositions& subPos, PDPos
 {
 	if(!isBasisOrthogonal){
 		
-		PDPositions rhs;
-		rhs.setZero(m_basesFunctionsT[0].rows() , 3);
-		rhs.col(0) = m_basesFunctionsTSparse[0] * m_massMatrix * fullPos.col(0);
-		rhs.col(1) = m_basesFunctionsTSparse[1] * m_massMatrix * fullPos.col(1);
-		rhs.col(2) = m_basesFunctionsTSparse[2] * m_massMatrix * fullPos.col(2);
 		subPos.resize(m_basesFunctionsTSparse[0].rows(), 3);
 		
 		// Projecting sparse in parallel
@@ -452,14 +441,14 @@ void PD::ProjDynSimulator::projectToSparsePODSubspace(PDPositions& subPos, PDPos
 		#pragma omp single nowait
 		{
 		#pragma omp task
-		    subPos.col(0) = m_subspaceXSparseSolver.solve(rhs.col(0));
+		    subPos.col(0) = m_subspaceXSparseSolver.solve(m_basesFunctionsTSparse[0] * m_massMatrix * fullPos.col(0));
 		#pragma omp task
-		    subPos.col(1) = m_subspaceYSparseSolver.solve(rhs.col(1));
+		    subPos.col(1) = m_subspaceYSparseSolver.solve(m_basesFunctionsTSparse[1] * m_massMatrix * fullPos.col(1));
 		#pragma omp task
-		    subPos.col(2) = m_subspaceZSparseSolver.solve(rhs.col(2));
+		    subPos.col(2) = m_subspaceZSparseSolver.solve(m_basesFunctionsTSparse[2] * m_massMatrix * fullPos.col(2));
 		} 
 		
-		if(m_subspaceXSolver.info()!= Eigen::Success || m_subspaceYSolver.info()!= Eigen::Success  || m_subspaceZSolver.info()!= Eigen::Success  ) {
+		if(m_subspaceXSparseSolver.info()!= Eigen::Success || m_subspaceYSparseSolver.info()!= Eigen::Success  || m_subspaceZSparseSolver.info()!= Eigen::Success  ) {
 		  // solving not sucssesful
 		  std::cout << "FATAL ERROR! projection to nonOrthogonal basis failed" << std::endl;
 		  return;
@@ -469,24 +458,10 @@ void PD::ProjDynSimulator::projectToSparsePODSubspace(PDPositions& subPos, PDPos
 	else{  	
 		// U.T M -u q_sub = U.T M q_full
 		// in the orthogonal case U.T M U = I
-		 subPos.col(0) = m_basesFunctionsTSparse[0] * m_massMatrix * fullPos.col(0);
-		 subPos.col(1) = m_basesFunctionsTSparse[1] * m_massMatrix * fullPos.col(1);
-		 subPos.col(2) = m_basesFunctionsTSparse[2] * m_massMatrix * fullPos.col(2);
-			 
-		/*
-		#pragma omp parallel
-		#pragma omp single nowait
-		{
-		#pragma omp task
-
-		    subPos.col(0) = projectionXMat * fullPos.col(0);  // if you remove .col() you can surprisingly see somthing!
-		#pragma omp task
-		    subPos.col(1) = projectionYMat * fullPos.col(1);
-		#pragma omp task
-		    subPos.col(2) = projectionZMat * fullPos.col(2);
-		} */
-		
-
+		PROJ_DYN_PARALLEL_FOR
+			for (unsigned int dim = 0; dim < 3; dim++) {
+				subPos.col(dim) = m_basesFunctionsTSparse[dim] * m_massMatrix * fullPos.col(dim);
+			}
 	}
 }
 
@@ -1920,7 +1895,7 @@ void ProjDynSimulator::setup() {
 			// m_numPosPODModes+1: because we add the original mesh as a component too
 			m_basesFunctions.resize(3);
 			m_basesFunctionsT.resize(3);
-			m_basesFunctionsSquared.resize(3);
+			
 			m_basesFunctionsSparse.resize(3);
 			m_basesFunctionsTSparse.resize(3);
 
@@ -2089,7 +2064,8 @@ void ProjDynSimulator::setup() {
 			std::cout << "Prepapring subSpcaces and POD Subspaces solvers.... " << std::endl;
 			// TODO: We need to project the current positions to the subspace, which can be done through matrix-vector product 
 			// because in this case matrices are assumed to be orthonormal.
-			
+			std::vector<PDMatrix> m_basesFunctionsSquared;
+			m_basesFunctionsSquared.resize(3);
 			if (!isPosSnapBasesOrtho) {
 				m_basesFunctionsSquared[0] = m_basesFunctionsT[0] * m_massMatrix * m_basesFunctions[0];
 				m_basesFunctionsSquared[1] = m_basesFunctionsT[1] * m_massMatrix * m_basesFunctions[1];
@@ -3321,11 +3297,11 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 
 	m_basesFunctions.resize(3);
 	m_basesFunctionsT.resize(3);
-	m_basesFunctionsSquared.resize(3);
+
 	m_basesFunctionsSparse.resize(3);
 	m_basesFunctionsTSparse.resize(3);
 
-	// In the POD case, different handling of basis are required, 
+	// In the snapBases case, different handling is required, 
 	// we decople the (X, Y, Z) dimensions and use three matrices so that we solve in parallel for each
 	// slicing m_baseFunctions to m_basesFunctions[0], m_basesFunctions[1] and m_basesFunctions[1] 
 	// m_numPosSnapBasesModes+1: because we add the original mesh as a component too
@@ -3338,37 +3314,21 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 	}
 
 	PROJ_DYN_PARALLEL_FOR
-	for (int k = 0; k < m_numPosSnapBasesModes; k++) {
-		for (int v = 0; v < m_numVertices; v++) {
-			m_basesFunctions[0](v, k) = m_snapshotsBasesTmp(v, k);
+		for (int dim = 0; dim < 3; dim++) {
+			for (int k = 0; k < m_numPosSnapBasesModes; k++) {
+				for (int v = 0; v < m_numVertices; v++) {
+					m_basesFunctions[dim](v, k) = m_snapshotsBasesTmp(v, dim * m_numPosSnapBasesModes + k);
+				}
+			}
 		}
-	}
-	PROJ_DYN_PARALLEL_FOR
-	for (int k = 0; k < m_numPosSnapBasesModes; k++) {
-		for (int v = 0; v < m_numVertices; v++) {
-			m_basesFunctions[1](v, k) = m_snapshotsBasesTmp(v, m_numPosSnapBasesModes + k);
-		}
-	}
-	PROJ_DYN_PARALLEL_FOR
-	for (int k = 0; k < m_numPosSnapBasesModes; k++) {
-		for (int v = 0; v < m_numVertices; v++) {
-			m_basesFunctions[2](v, k) = m_snapshotsBasesTmp(v, 2 * m_numPosSnapBasesModes + k);
-		}
-	}
 
 	// adding the original mesh as the component supports numerical stability
 	PROJ_DYN_PARALLEL_FOR
-	for (int v = 0; v < m_numVertices; v++) {
-		m_basesFunctions[0](v, m_numPosSnapBasesModes) = m_positions(v, 0);
-	}
-	PROJ_DYN_PARALLEL_FOR
-	for (int v = 0; v < m_numVertices; v++) {
-		m_basesFunctions[1](v, m_numPosSnapBasesModes) = m_positions(v, 1);
-	}
-	PROJ_DYN_PARALLEL_FOR
-	for (int v = 0; v < m_numVertices; v++) {
-		m_basesFunctions[2](v, m_numPosSnapBasesModes) = m_positions(v, 2);
-	} 
+		for (int dim = 0; dim < 3; dim++) {
+			for (int v = 0; v < m_numVertices; v++) {
+				m_basesFunctions[dim](v, m_numPosSnapBasesModes) = m_positions(v, dim);
+			}
+		}
 
 	if (m_basesFunctions[0].hasNaN() || m_basesFunctions[1].hasNaN() || m_basesFunctions[2].hasNaN()) {
 		std::cout << "Error: NaN entries in POD basis matrixies" << std::endl;
@@ -3379,27 +3339,27 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 	// Sparse subspace basis needs to be available before the snapshot groups get initialized
 	if (m_useSparseMatricesForSubspace) {
 		std::cout << "Sparsifing snapshots bases matrcies... " << std::endl;
-
-		m_basesFunctionsSparse[0] = m_basesFunctions[0].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-		m_basesFunctionsTSparse[0] = m_basesFunctionsT[0].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-
-		m_basesFunctionsSparse[1] = m_basesFunctions[1].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-		m_basesFunctionsTSparse[1] = m_basesFunctionsT[1].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-
-		m_basesFunctionsSparse[2] = m_basesFunctions[2].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-		m_basesFunctionsTSparse[2] = m_basesFunctionsT[2].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_basesFunctionsSparse[dim] = m_basesFunctions[dim].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+			}
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_basesFunctionsTSparse[dim] = m_basesFunctionsT[dim].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+			}
 	}
 
 
 	/*  If using subspaces, after finalizing the basis function (basis and basis.T ready!), we set up projection of full positions into the subspace.
 	Initial subspace positions/velocities will be computed from full positions/velocities. */
 	std::cout << "Prepapring subSpcaces and POD Subspaces solvers.... " << std::endl;
-
+	std::vector<PDMatrix> m_basesFunctionsSquared;
+	m_basesFunctionsSquared.resize(3);
 	if (!isPosSnapBasesOrtho) {
-		m_basesFunctionsSquared[0] = m_basesFunctionsT[0] * m_massMatrix * m_basesFunctions[0];
-		m_basesFunctionsSquared[1] = m_basesFunctionsT[1] * m_massMatrix * m_basesFunctions[1];
-		m_basesFunctionsSquared[2] = m_basesFunctionsT[2] * m_massMatrix * m_basesFunctions[2];
-
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_basesFunctionsSquared[dim] = m_basesFunctionsT[dim] * m_massMatrix * m_basesFunctions[dim];
+			}
 #pragma omp parallel
 #pragma omp single nowait
 		{
@@ -3417,20 +3377,23 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 			return;
 		}
 		if (m_useSparseMatricesForSubspace) {
-			PDSparseMatrix m_baseXFunctionsSquaredSparse, m_baseYFunctionsSquaredSparse, m_baseZFunctionsSquaredSparse;
-			m_baseXFunctionsSquaredSparse = m_basesFunctionsTSparse[0] * m_massMatrix * m_basesFunctionsSparse[0];
-			m_baseYFunctionsSquaredSparse = m_basesFunctionsTSparse[1] * m_massMatrix * m_basesFunctionsSparse[1];
-			m_baseZFunctionsSquaredSparse = m_basesFunctionsTSparse[2] * m_massMatrix * m_basesFunctionsSparse[2];
+			std::vector<PDSparseMatrix> m_baseFunctionsSquaredSparse;
+			m_baseFunctionsSquaredSparse.resize(3);
+
+			PROJ_DYN_PARALLEL_FOR
+				for (int dim = 0; dim < 3; dim++) {
+					m_baseFunctionsSquaredSparse[dim] = m_basesFunctionsSquared[dim].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+				}
 
 #pragma omp parallel
 #pragma omp single nowait
 			{
 #pragma omp task
-				m_subspaceXSparseSolver.compute(m_baseXFunctionsSquaredSparse);
+				m_subspaceXSparseSolver.compute(m_baseFunctionsSquaredSparse[0]);
 #pragma omp task
-				m_subspaceYSparseSolver.compute(m_baseYFunctionsSquaredSparse);
+				m_subspaceYSparseSolver.compute(m_baseFunctionsSquaredSparse[1]);
 #pragma omp task
-				m_subspaceZSparseSolver.compute(m_baseZFunctionsSquaredSparse);
+				m_subspaceZSparseSolver.compute(m_baseFunctionsSquaredSparse[2]);
 			}
 		}
 	}
@@ -3458,8 +3421,7 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 	// 1) Compute the momentum part of the lhs and rhs matrices of the global step
 	// in case no position space reduction, or we run full simulation, the solver uses these terms (no projection required)
 	std::cout << "Initiating momentum term of LHS and RHS matrices ..." << std::endl;
-	m_lhsMatrix = m_massMatrix;
-	m_lhsMatrix *= 1.f / (m_timeStep * m_timeStep);
+	m_lhsMatrix = m_massMatrix * ( 1.f / (m_timeStep * m_timeStep));
 	m_rhsMasses.setZero(m_numVertices);
 	for (int v = 0; v < m_numVertices; v++) {
 		m_rhsMasses(v) = m_vertexMasses(v) / (m_timeStep * m_timeStep);
@@ -3470,45 +3432,35 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 
 	std::cout << "Projecting the momentum term RHS matrices to snapshots subspaces, for the global system ..." << std::endl;
 	if (isPosSnapBasesOrtho) {  //in the orthogonal case: U.T M U = Identity
-		m_projectedRHS_mom_pre[0].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-		m_projectedRHS_mom_pre[1].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-		m_projectedRHS_mom_pre[2].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
 
-		m_projectedRHS_mom[0] = m_projectedRHS_mom_pre[0] * (1. / (m_timeStep * m_timeStep));
-		m_projectedRHS_mom[1] = m_projectedRHS_mom_pre[0] * (1. / (m_timeStep * m_timeStep));
-		m_projectedRHS_mom[2] = m_projectedRHS_mom_pre[0] * (1. / (m_timeStep * m_timeStep));
-
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_projectedRHS_mom_pre[dim].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			}
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_projectedRHS_mom[dim] = m_projectedRHS_mom_pre[0] * (1. / (m_timeStep * m_timeStep));
+			}
 	}
 	else {
-		m_projectedRHS_mom_pre[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-		m_projectedRHS_mom_pre[1].setZero(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
-		m_projectedRHS_mom_pre[2].setZero(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());
+		/*
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_projectedRHS_mom_pre[dim].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			}
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_projectedRHS_mom[dim].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			} */
 
-		m_projectedRHS_mom[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-		m_projectedRHS_mom[1].setZero(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
-		m_projectedRHS_mom[2].setZero(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());
-
-#pragma omp parallel
-#pragma omp single nowait
-		{
-#pragma omp task
-			m_projectedRHS_mom_pre[0] = (m_basesFunctionsT[0] * m_massMatrix * m_basesFunctions[0]);
-#pragma omp task
-			m_projectedRHS_mom_pre[1] = (m_basesFunctionsT[1] * m_massMatrix * m_basesFunctions[1]);
-#pragma omp task
-			m_projectedRHS_mom_pre[2] = (m_basesFunctionsT[2] * m_massMatrix * m_basesFunctions[2]);
-		}
-
-#pragma omp parallel
-#pragma omp single nowait
-		{
-#pragma omp task
-			m_projectedRHS_mom[0] = m_projectedRHS_mom_pre[0] * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)
-#pragma omp task
-			m_projectedRHS_mom[1] = m_projectedRHS_mom_pre[1] * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)	
-#pragma omp task
-			m_projectedRHS_mom[2] = m_projectedRHS_mom_pre[2] * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)	
-		}
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_projectedRHS_mom_pre[dim] = (m_basesFunctionsT[dim] * m_massMatrix * m_basesFunctions[dim]);
+			}
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_projectedRHS_mom[dim] = m_projectedRHS_mom_pre[dim] * (1. / (m_timeStep * m_timeStep)); // (U.T M U / h ^ 2)
+			}
 
 		if (m_projectedRHS_mom[0].hasNaN() || m_projectedRHS_mom[1].hasNaN() || m_projectedRHS_mom[2].hasNaN()) {
 			std::cout << "Warning: projected momentum RHS term has NaN values." << std::endl;
@@ -3522,45 +3474,36 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 	// Momentum term: m_subspaceLHS_mom = (U.T M U/h^2)
 	if (isPosSnapBasesOrtho) {  //in the orthogonal case: U.T M U = Identity
 
-		m_projectedLHS_mom[0].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-		m_projectedLHS_mom[1].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-		m_projectedLHS_mom[2].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-#pragma omp parallel
-#pragma omp single nowait
-		{
-#pragma omp task
-			m_projectedLHS_mom[0] *= (1. / (m_timeStep * m_timeStep));    // I /h^2
-#pragma omp task
-			m_projectedLHS_mom[1] *= (1. / (m_timeStep * m_timeStep));
-#pragma omp task
-			m_projectedLHS_mom[2] *= (1. / (m_timeStep * m_timeStep));
-		}
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_projectedLHS_mom[dim].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			}
+
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_projectedLHS_mom[dim] *= (1. / (m_timeStep * m_timeStep));
+			}
 	}
 	else {
-#pragma omp parallel
-#pragma omp single nowait
-		{
-#pragma omp task
-			m_projectedLHS_mom[0] = m_basesFunctionsT[0] * m_lhsMatrix * m_basesFunctions[0];   // U.T M U /h^2
-#pragma omp task
-			m_projectedLHS_mom[1] = m_basesFunctionsT[1] * m_lhsMatrix * m_basesFunctions[1];
-#pragma omp task
-			m_projectedLHS_mom[2] = m_basesFunctionsT[2] * m_lhsMatrix * m_basesFunctions[2];
+
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_projectedLHS_mom[dim] = m_basesFunctionsT[dim] * m_lhsMatrix * m_basesFunctions[dim];   // U.T M U /h^2
+			}
+
+		if (m_projectedLHS_mom[0].hasNaN() || m_projectedLHS_mom[1].hasNaN() || m_projectedLHS_mom[2].hasNaN()) {
+			std::cout << "Fatal: projected momentum LHS term has NaN values." << std::endl;
 		}
 	}
-
-	if (m_projectedLHS_mom[0].hasNaN() || m_projectedLHS_mom[1].hasNaN() || m_projectedLHS_mom[2].hasNaN()) {
-		std::cout << "Fatal: projected momentum LHS term has NaN values." << std::endl;
-	}
-
 	std::cout << "Building and factorizing the complete LHS matrix... " << std::endl;
 
 	PDSparseMatrix conMat(m_lhsMatrix.rows(), m_lhsMatrix.cols());
-	conMat.setZero();
+	//conMat.setZero();
 	std::vector<Eigen::Triplet<PDScalar>> entries;
+
 	for (auto& c : m_constraints) {
 		PDSparseMatrixRM& selMat = c->getSelectionMatrix();
-		for (int k = 0; k < selMat.outerSize(); ++k)
+		for (int k = 0; k < selMat.outerSize(); ++k) {
 			for (PDSparseMatrixRM::InnerIterator it(selMat, k); it; ++it)
 			{
 				for (PDSparseMatrixRM::InnerIterator it2(selMat, k); it2; ++it2)
@@ -3568,46 +3511,31 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 					entries.push_back(Eigen::Triplet<PDScalar>(it.col(), it2.col(), it.value() * it2.value() * c->getWeight()));
 				}
 			}
+		}
 	}
 
 	conMat.setFromTriplets(entries.begin(), entries.end());  // Sum lambda S S.T
-
+	// m_projectedLHS_inner: U.T Sum S.T S  U
 	m_projectedLHS_inner.resize(3);
-
-	m_projectedLHS_inner[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-	m_projectedLHS_inner[1].setZero(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
-	m_projectedLHS_inner[2].setZero(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());
-
+	PROJ_DYN_PARALLEL_FOR
+		for (int dim = 0; dim < 3; dim++) {
+			//m_projectedLHS_inner[dim].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			m_projectedLHS_inner[dim] = m_basesFunctionsT[dim] * conMat * m_basesFunctions[dim];
+		}
 
 	std::cout << "Projecting the LHS matrices to the subspace..." << std::endl;
 
-// m_projectedLHS_inner: U.T Sum S.T S  U
-#pragma omp parallel
-#pragma omp single nowait
-	{
-#pragma omp task
-		m_projectedLHS_inner[0] = m_basesFunctionsT[0] * conMat * m_basesFunctions[0];
-#pragma omp task
-		m_projectedLHS_inner[1] = m_basesFunctionsT[1] * conMat * m_basesFunctions[1];
-#pragma omp task
-		m_projectedLHS_inner[2] = m_basesFunctionsT[2] * conMat * m_basesFunctions[2];
-	}
 	if (m_projectedLHS_inner[0].hasNaN() || m_projectedLHS_inner[1].hasNaN() || m_projectedLHS_inner[2].hasNaN()) {
 		std::cout << "Error: projected constraints LHS term orthogonal has NaN values." << std::endl;
 	}
 
 	//m_projectedlhsMatrix: (U.T M U/h^2) + U.T \Sum lambda S S.T U
 	m_projectedlhsMatrix.resize(3);
-#pragma omp parallel
-#pragma omp single nowait
-	{
-#pragma omp task
-		m_projectedlhsMatrix[0] = m_projectedLHS_mom[0] + m_projectedLHS_inner[0];   
-#pragma omp task
-		m_projectedlhsMatrix[1] = m_projectedLHS_mom[1] + m_projectedLHS_inner[1];
-#pragma omp task
-		m_projectedlhsMatrix[2] = m_projectedLHS_mom[2] + m_projectedLHS_inner[2];
-	}
+	PROJ_DYN_PARALLEL_FOR
+		for (int dim = 0; dim < 3; dim++) {
+			m_projectedlhsMatrix[dim] = m_projectedLHS_mom[dim] + m_projectedLHS_inner[dim];
+
+		}
 	if (m_projectedlhsMatrix[0].hasNaN() || m_projectedlhsMatrix[1].hasNaN() || m_projectedlhsMatrix[2].hasNaN()) {
 		std::cout << "Error: projected LHS has NaN values." << std::endl;
 	}
@@ -3636,10 +3564,10 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 	if (m_useSparseMatricesForSubspace) {
 		std::vector<PDSparseMatrix> m_projectedlhsMatrixSparse;
 		m_projectedlhsMatrixSparse.resize(3);
-
-		m_projectedlhsMatrixSparse[0] = m_projectedlhsMatrix[0].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
-		m_projectedlhsMatrixSparse[1] = m_projectedlhsMatrix[1].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
-		m_projectedlhsMatrixSparse[2] = m_projectedlhsMatrix[2].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
+		PROJ_DYN_PARALLEL_FOR
+			for (int dim = 0; dim < 3; dim++) {
+				m_projectedlhsMatrixSparse[dim] = m_projectedlhsMatrix[dim].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
+			}
 
 #pragma omp parallel
 #pragma omp single nowait
@@ -3652,17 +3580,19 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 			m_subspaceZSystemSolverSparse.compute(m_projectedlhsMatrixSparse[2]);
 		}
 
-
 	m_projectedRHS_momSparse.resize(3);
-	m_projectedRHS_momSparse[0] = m_projectedRHS_mom[0].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);  // Only momentum term of RHS
-	m_projectedRHS_momSparse[1] = m_projectedRHS_mom[1].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
-	m_projectedRHS_momSparse[2] = m_projectedRHS_mom[2].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
+	PROJ_DYN_PARALLEL_FOR
+		for (int dim = 0; dim < 3; dim++) {
+			m_projectedRHS_momSparse[dim] = m_projectedRHS_mom[dim].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);  // Only momentum term of RHS
+		}
+	
 	std::cout << "First RHS term has been also sparsified.." << std::endl;
 	}
 
 	m_collidedVerts = new bool[m_numVertices];
 
-	for (int i = 0; i < m_numVertices; i++) m_collidedVerts[i] = false;
+	PROJ_DYN_PARALLEL_FOR
+		for (int i = 0; i < m_numVertices; i++) m_collidedVerts[i] = false;
 
 	m_isSetup = true;
 	m_collisionCorrection = false;

@@ -452,7 +452,7 @@ int main()
 		// PCA reduction-methods parameters
 		//
 		// 1. For position subspaces, use only one methods of the following:
-		int numberPositionPCAModes = 0;				            // number of PCA bases/modes for position subspace construction (0. means the method is off)
+		int numberPositionPCAModes = 80;				            // number of PCA bases/modes for position subspace construction (0. means the method is off)
 		int numberPositionSPLOCSModes = 0;				        // number of SPLOCS bases/modes for position subspace construction (0. means the method is off)
 
 		// TODO: 2. For constaints reduction 
