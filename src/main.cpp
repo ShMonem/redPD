@@ -380,8 +380,9 @@ int main()
 	// Depending on whatever your default working directory is and wherever this mesh
 	// file is, you will need to change this URL
 	//std::string meshURL = "armadillo.obj";
-	std::string meshURL = "../../../data/bunny.obj";
-	std::string meshName(PD::getMeshName(meshURL));
+	std::string mesh = "bunny.obj";
+	std::string meshURL = "../../../data/" + mesh;
+	std::string meshName(PD::getMeshName(mesh));
 	// create the directory to store frames as .png
 	// note: photoes are stored only if STORE_FRAMES_PNG is sat to true.
 

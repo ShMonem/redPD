@@ -314,9 +314,10 @@ void ProjDynSimulator::finalizeBaseFunctions() {
 }
 
 void ProjDynSimulator::finalizeSnapBasesFunctions() {
-	m_basesFunctionsT[0] = m_basesFunctions[0].transpose();
-	m_basesFunctionsT[1] = m_basesFunctions[1].transpose();
-	m_basesFunctionsT[2] = m_basesFunctions[2].transpose();	
+	PROJ_DYN_PARALLEL_FOR
+		for (int i=0; i < 3; i++) {
+			m_basesFunctionsT[i] = m_basesFunctions[i].transpose();
+		}
 }
 
 
@@ -1237,7 +1238,6 @@ void PD::ProjDynSimulator::createPositionSubspace(unsigned int numSamples, bool 
 		}
 		
 		m_snapshotsBasesTmp = Upca;
-		//std::cout.precision(17);
 		
 		if(Upca.cols() != 3*numSamples){
 			std::cout << "Error: dimension of of basisFunctions not matching number of POD modes!" << std::endl;
@@ -1853,7 +1853,6 @@ void PD::ProjDynSimulator::initQDEIMRHSInterpolGroup(RHSInterpolationGroup& g, s
  
 void ProjDynSimulator::opt_setup() {
 
-	std::cout << "Setting opt simulation..." << std::endl;
 
 #ifndef EIGEN_DONT_PARALLELIZE
 	Eigen::setNbThreads(PROJ_DYN_NUM_THREADS);
@@ -1861,8 +1860,18 @@ void ProjDynSimulator::opt_setup() {
 
 	m_precomputationStopWatch.startStopWatch();
 	m_positionCorrections.setZero(m_positions.rows(), 3);
-	// case no reduction for position space:
-	if (m_usingPosSubspaces) {
+	/* Do pre-computations that only necessary for the simulation case*/
+	
+	if (m_usePosSnapBases) {
+		// Either PCA or SPLCS reduction for position space:
+		snapBases_lhsSetup();
+	}
+	else if (m_usingSkinSubspaces) {
+		// LBS reduction for position space:
+		lbs_lhsSetup();
+	}
+	else if (!m_usingPosSubspaces){
+		// No reduction for position space:
 		full_lhsSetup();
 	}
 	
@@ -1880,9 +1889,6 @@ void ProjDynSimulator::setup() {
 #ifndef EIGEN_DONT_PARALLELIZE
 	Eigen::setNbThreads(PROJ_DYN_NUM_THREADS);
 #endif 
-
-	
-	
 
 	m_precomputationStopWatch.startStopWatch();
 
@@ -3007,7 +3013,7 @@ void ProjDynSimulator::full_lhsSetup() {
 
 	// Assert no position reduction method is used
 	assert(!m_usingSkinSubspaces && !m_usingPODPosSubspaces && !m_usingSPLOCSPosSubspaces);
-	std::cout << "Simulation case: FullSpace position ..." << std::endl;
+	std::cout << "Pre-computations: FullSpace position ..." << std::endl;
 
 	m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "no_posReduction";
 
@@ -3101,7 +3107,7 @@ void ProjDynSimulator::lbs_lhsSetup() {
 	assert(m_usingSkinSubspaces);
 	assert(!m_usingPODPosSubspaces && !m_usingSPLOCSPosSubspaces);
 	m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "posLBS_";
-	std::cout << "Simulation case: Skinning subspaces for positions ..." << std::endl;
+	std::cout << "Pre-computations: Skinning subspaces for positions ..." << std::endl;
 
 	m_positionCorrections.setZero(m_positions.rows(), 3);
 
@@ -3135,10 +3141,6 @@ void ProjDynSimulator::lbs_lhsSetup() {
 	m_velocities = m_baseFunctions * m_velocitiesSubspace;
 
 
-	// Collect constraints for building global system and interpolation subspaces for rhs interpolation
-	// (if no rhs interpolation is used, we simply collect all constraints, otherwise we only
-	// use constraints from the main group and treat the rest as additional constraints) (?)
-
 	/* the "m_constraints" are the ones added in main.cpp after the simulator has been initiated
 	   example: sim->addTetStrain(0.00051, 1.f, 1.f); (in main.cpp) */
 	std::vector< ProjDynConstraint* >* usedConstraints = &m_constraints;
@@ -3165,7 +3167,7 @@ void ProjDynSimulator::lbs_lhsSetup() {
 
 	std::cout << "Projecting the momentum term LHS to skinning subspaces, for the global system ..." << std::endl;
 	// Momentum term
-	m_subspaceLHS_mom = m_baseFunctionsTransposed * m_lhsMatrix * m_baseFunctions;       // * (m_timeStep * m_timeStep);
+	m_subspaceLHS_mom = m_baseFunctionsTransposed * m_lhsMatrix * m_baseFunctions;       
 	PDMatrix eps(m_subspaceLHS_mom.rows(), m_subspaceLHS_mom.rows());
 	eps.setIdentity();
 	eps *= 1e-10;
@@ -3293,29 +3295,26 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 	if (m_usingPODPosSubspaces) {
 		assert(!m_usingSPLOCSPosSubspaces);
 		m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "posPCA_";
-		std::cout << "Simulation case: PCA subspaces for positions ..." << std::endl;
+		std::cout << "Pre-computations: PCA subspaces for positions ..." << std::endl;
 		std::cout << SNAPBASES_POSITION_ALIGNMENT << SNAPBASES_POSITION_WEIGHTING << SNAPBASES_POSITION_SUPPORT << SNAPBASES_POSITION_ORTHOGONAL << std::endl;
 	}
 	if (m_usingSPLOCSPosSubspaces) {
 		assert(!m_usingPODPosSubspaces);
 		m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "posSPLOCS_";
-		std::cout << "Simulation case: SPLOCS subspaces for positions ..." << std::endl;
+		std::cout << "Pre-computations: SPLOCS subspaces for positions ..." << std::endl;
 		std::cout << SNAPBASES_POSITION_ALIGNMENT << SNAPBASES_POSITION_WEIGHTING << SNAPBASES_POSITION_SUPPORT << SNAPBASES_POSITION_ORTHOGONAL << std::endl;
 	}
-	
-
-	m_positionCorrections.setZero(m_positions.rows(), 3);
 
 	// Load position subspace bases from binary files
 	std::cout << "Loading subspaces..." << std::endl;
 	if (m_usingPODPosSubspaces) {
-		createPositionSubspace(m_numPosPODModes, false, true);  // here we choose usingPODPosSubSpace
+		createPositionSubspace(m_numPosPODModes, false, true);  
 		m_numPosSnapBasesModes = m_numPosPODModes;
 		std::cout << "POD subspaces have been loaded..." << std::endl;
 	}
 	else if (m_usingSPLOCSPosSubspaces)
 	{
-		createPositionSubspace(m_numPosSPLOCSModes, false, true);  // here we choose usingPODPosSubSpace
+		createPositionSubspace(m_numPosSPLOCSModes, false, true); 
 		m_numPosSnapBasesModes = m_numPosSPLOCSModes;
 		std::cout << "SPLOCS subspaces have been loaded..." << std::endl;
 	}
@@ -3323,36 +3322,53 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 	m_basesFunctions.resize(3);
 	m_basesFunctionsT.resize(3);
 	m_basesFunctionsSquared.resize(3);
+	m_basesFunctionsSparse.resize(3);
+	m_basesFunctionsTSparse.resize(3);
 
 	// In the POD case, different handling of basis are required, 
 	// we decople the (X, Y, Z) dimensions and use three matrices so that we solve in parallel for each
 	// slicing m_baseFunctions to m_basesFunctions[0], m_basesFunctions[1] and m_basesFunctions[1] 
 	// m_numPosSnapBasesModes+1: because we add the original mesh as a component too
-	m_basesFunctions[0].setZero(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes + 1);
-	m_basesFunctions[1].setZero(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes + 1);
-	m_basesFunctions[2].setZero(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes + 1);
+	m_basesFunctions[0].setZero(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
+	m_basesFunctions[1].setZero(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
+	m_basesFunctions[2].setZero(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
 
 	if (3 * m_numPosSnapBasesModes != m_snapshotsBasesTmp.cols()) {
 		std::cout << "Sizes are not matching... we have " << m_snapshotsBasesTmp.cols() << " columns and 3*m_numPosSnapBasesModes = " << 3 * m_numPosSnapBasesModes << std::endl;
 	}
 
-	//PROJ_DYN_PARALLEL_FOR
+	PROJ_DYN_PARALLEL_FOR
 	for (int k = 0; k < m_numPosSnapBasesModes; k++) {
-		//std::cout << normFactor << std::endl;
 		for (int v = 0; v < m_numVertices; v++) {
-			// using different signs for the basis rotates the fist frame!
 			m_basesFunctions[0](v, k) = m_snapshotsBasesTmp(v, k);
+		}
+	}
+	PROJ_DYN_PARALLEL_FOR
+	for (int k = 0; k < m_numPosSnapBasesModes; k++) {
+		for (int v = 0; v < m_numVertices; v++) {
 			m_basesFunctions[1](v, k) = m_snapshotsBasesTmp(v, m_numPosSnapBasesModes + k);
+		}
+	}
+	PROJ_DYN_PARALLEL_FOR
+	for (int k = 0; k < m_numPosSnapBasesModes; k++) {
+		for (int v = 0; v < m_numVertices; v++) {
 			m_basesFunctions[2](v, k) = m_snapshotsBasesTmp(v, 2 * m_numPosSnapBasesModes + k);
 		}
 	}
 
-	// add the original mesh as the component
+	// adding the original mesh as the component supports numerical stability
+	PROJ_DYN_PARALLEL_FOR
 	for (int v = 0; v < m_numVertices; v++) {
 		m_basesFunctions[0](v, m_numPosSnapBasesModes) = m_positions(v, 0);
-		m_basesFunctions[1](v, m_numPosSnapBasesModes) = m_positions(v, 1);
-		m_basesFunctions[2](v, m_numPosSnapBasesModes) = m_positions(v, 2);
 	}
+	PROJ_DYN_PARALLEL_FOR
+	for (int v = 0; v < m_numVertices; v++) {
+		m_basesFunctions[1](v, m_numPosSnapBasesModes) = m_positions(v, 1);
+	}
+	PROJ_DYN_PARALLEL_FOR
+	for (int v = 0; v < m_numVertices; v++) {
+		m_basesFunctions[2](v, m_numPosSnapBasesModes) = m_positions(v, 2);
+	} 
 
 	if (m_basesFunctions[0].hasNaN() || m_basesFunctions[1].hasNaN() || m_basesFunctions[2].hasNaN()) {
 		std::cout << "Error: NaN entries in POD basis matrixies" << std::endl;
@@ -3449,6 +3465,8 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 		m_rhsMasses(v) = m_vertexMasses(v) / (m_timeStep * m_timeStep);
 	}
 	
+	m_projectedRHS_mom_pre.resize(3);
+	m_projectedRHS_mom.resize(3);
 
 	std::cout << "Projecting the momentum term RHS matrices to snapshots subspaces, for the global system ..." << std::endl;
 	if (isPosSnapBasesOrtho) {  //in the orthogonal case: U.T M U = Identity
@@ -3498,6 +3516,7 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 
 	}
 
+	m_projectedLHS_mom.resize(3);
 
 	std::cout << "Projecting the momentum term LHS matrices to POD subspaces, for the global system ..." << std::endl;
 	// Momentum term: m_subspaceLHS_mom = (U.T M U/h^2)
@@ -3554,6 +3573,7 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 	conMat.setFromTriplets(entries.begin(), entries.end());  // Sum lambda S S.T
 
 	m_projectedLHS_inner.resize(3);
+
 	m_projectedLHS_inner[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
 	m_projectedLHS_inner[1].setZero(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
 	m_projectedLHS_inner[2].setZero(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());
@@ -3577,6 +3597,7 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 	}
 
 	//m_projectedlhsMatrix: (U.T M U/h^2) + U.T \Sum lambda S S.T U
+	m_projectedlhsMatrix.resize(3);
 #pragma omp parallel
 #pragma omp single nowait
 	{
