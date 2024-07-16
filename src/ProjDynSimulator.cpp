@@ -1851,6 +1851,25 @@ void PD::ProjDynSimulator::initQDEIMRHSInterpolGroup(RHSInterpolationGroup& g, s
 	g.initQDEIMInterpolation(m_numVertices, samples, Mqdeim);
 }
  
+void ProjDynSimulator::opt_setup() {
+
+	std::cout << "Setting opt simulation..." << std::endl;
+
+#ifndef EIGEN_DONT_PARALLELIZE
+	Eigen::setNbThreads(PROJ_DYN_NUM_THREADS);
+#endif 
+
+	m_precomputationStopWatch.startStopWatch();
+	m_positionCorrections.setZero(m_positions.rows(), 3);
+	// case no reduction for position space:
+	if (m_usingPosSubspaces) {
+		full_lhsSetup();
+	}
+	
+
+	m_precomputationStopWatch.stopStopWatch();
+
+}
 
 void ProjDynSimulator::setup() { 
 	
@@ -1862,10 +1881,13 @@ void ProjDynSimulator::setup() {
 	Eigen::setNbThreads(PROJ_DYN_NUM_THREADS);
 #endif 
 
+	
+	
+
 	m_precomputationStopWatch.startStopWatch();
 
 	m_positionCorrections.setZero(m_positions.rows(), 3);
-
+	
 	/* First, in case we use subspaces to reduce position, we create or load position subspace basis functions */
 	if (m_usingPosSubspaces) {
 		//bool loadSuccess = false;

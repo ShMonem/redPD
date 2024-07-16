@@ -148,6 +148,8 @@ namespace PD {
 		int getNumVertices();
 		void addConstraint(ProjDynConstraint* c, bool alwaysAdd = false);
 		void setup();
+
+		void opt_setup();
 		void full_lhsSetup();
 		void lbs_lhsSetup();
 		void snapBases_lhsSetup();
