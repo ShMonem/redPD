@@ -149,10 +149,10 @@ namespace PD {
 		void addConstraint(ProjDynConstraint* c, bool alwaysAdd = false);
 		void setup();
 
-		void opt_setup();
-		void full_lhsSetup();
-		void lbs_lhsSetup();
-		void snapBases_lhsSetup();
+		void optimizedSetup();
+		void fullPosSetup();
+		void lbsPosSetup();
+		void snapBasesPosSetup();
 
 		void setExternalForces(PDPositions fExt);
 		void addGravity(PDScalar g);

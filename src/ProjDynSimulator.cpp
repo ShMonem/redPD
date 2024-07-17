@@ -1826,7 +1826,7 @@ void PD::ProjDynSimulator::initQDEIMRHSInterpolGroup(RHSInterpolationGroup& g, s
 	g.initQDEIMInterpolation(m_numVertices, samples, Mqdeim);
 }
  
-void ProjDynSimulator::opt_setup() {
+void ProjDynSimulator::optimizedSetup() {
 
 
 #ifndef EIGEN_DONT_PARALLELIZE
@@ -1836,18 +1836,19 @@ void ProjDynSimulator::opt_setup() {
 	m_precomputationStopWatch.startStopWatch();
 	m_positionCorrections.setZero(m_positions.rows(), 3);
 	/* Do pre-computations that only necessary for the simulation case*/
-	
+
+	/* First for position full space or reduced subspace*/
 	if (m_usePosSnapBases) {
 		// Either PCA or SPLCS reduction for position space:
-		snapBases_lhsSetup();
+		snapBasesPosSetup();
 	}
 	else if (m_usingSkinSubspaces) {
 		// LBS reduction for position space:
-		lbs_lhsSetup();
+		lbsPosSetup();
 	}
 	else if (!m_usingPosSubspaces){
 		// No reduction for position space:
-		full_lhsSetup();
+		fullPosSetup();
 	}
 	
 
@@ -2985,7 +2986,7 @@ void ProjDynSimulator::setup() {
 //std::cout << m_velocitiesSubspace << std::endl;
 }
 
-void ProjDynSimulator::full_lhsSetup() {
+void ProjDynSimulator::fullPosSetup() {
 
 	// Assert no position reduction method is used
 	assert(!m_usingSkinSubspaces && !m_usingPODPosSubspaces && !m_usingSPLOCSPosSubspaces);
@@ -2994,7 +2995,6 @@ void ProjDynSimulator::full_lhsSetup() {
 	m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "no_posReduction";
 
 	// Collect constraints for building global system
-	m_positionCorrections.setZero(m_positions.rows(), 3);
 	std::vector< ProjDynConstraint* >* usedConstraints = &m_constraints;
 
 	/* Initialize the LHS and RHS matrices for the global system: */
@@ -3078,14 +3078,12 @@ void ProjDynSimulator::full_lhsSetup() {
 	recomputeWeightedForces();
 }  // end of precomputation for case no-PosReduction
 
-void ProjDynSimulator::lbs_lhsSetup() {
+void ProjDynSimulator::lbsPosSetup() {
 	// Assert only LBS position reduction method is used
 	assert(m_usingSkinSubspaces);
 	assert(!m_usingPODPosSubspaces && !m_usingSPLOCSPosSubspaces);
 	m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "posLBS_";
 	std::cout << "Pre-computations: Skinning subspaces for positions ..." << std::endl;
-
-	m_positionCorrections.setZero(m_positions.rows(), 3);
 
 	std::cout << "Creating subspaces..." << std::endl;
 	/* Create position subspace basis functions */
@@ -3264,7 +3262,7 @@ void ProjDynSimulator::lbs_lhsSetup() {
 	recomputeWeightedForces();
 } // end of precomputation for LBS for position case
 
-void ProjDynSimulator::snapBases_lhsSetup() {
+void ProjDynSimulator::snapBasesPosSetup() {
 	// Case only one type of snapshots-based bases is used for position reduction
 	assert(!m_usingSkinSubspaces);
 	assert(m_usingPODPosSubspaces || m_usingSPLOCSPosSubspaces);

@@ -97,7 +97,7 @@ ProjDynSimulator *initSimulator(PD::PDPositions verts, PD::PDTriangles faces, PD
 	// The call to the setup function computes the subspaces for vertex
 	// positions and constraint projections and factorizes all linear systems
 	// for local and global steps
-	sim->opt_setup();
+	sim->optimizedSetup();
 
 	return sim;
 }
