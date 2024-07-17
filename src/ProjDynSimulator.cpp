@@ -3303,11 +3303,11 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 
 	// In the snapBases case, different handling is required, 
 	// we decople the (X, Y, Z) dimensions and use three matrices so that we solve in parallel for each
-	// slicing m_baseFunctions to m_basesFunctions[0], m_basesFunctions[1] and m_basesFunctions[1] 
+	// slicing m_baseFunctions to m_basesFunctions[0], m_basesFunctions[1] and m_basesFunctions[2] 
 	// m_numPosSnapBasesModes+1: because we add the original mesh as a component too
-	m_basesFunctions[0].setZero(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
-	m_basesFunctions[1].setZero(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
-	m_basesFunctions[2].setZero(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
+	m_basesFunctions[0].resize(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
+	m_basesFunctions[1].resize(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
+	m_basesFunctions[2].resize(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
 
 	if (3 * m_numPosSnapBasesModes != m_snapshotsBasesTmp.cols()) {
 		std::cout << "Sizes are not matching... we have " << m_snapshotsBasesTmp.cols() << " columns and 3*m_numPosSnapBasesModes = " << 3 * m_numPosSnapBasesModes << std::endl;
@@ -3398,8 +3398,8 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 		}
 	}
 
-	m_positionsSubspace.setZero(m_basesFunctions[0].cols(), 3);
-	m_velocitiesSubspace.setZero(m_basesFunctions[0].cols(), 3);
+	m_positionsSubspace.resize(m_basesFunctions[0].cols(), 3);
+	m_velocitiesSubspace.resize(m_basesFunctions[0].cols(), 3);
 
 	std::cout << "Projecting positions, velocities and forces into the POD subspace... " << std::endl;
 
@@ -3422,7 +3422,7 @@ void ProjDynSimulator::snapBases_lhsSetup() {
 	// in case no position space reduction, or we run full simulation, the solver uses these terms (no projection required)
 	std::cout << "Initiating momentum term of LHS and RHS matrices ..." << std::endl;
 	m_lhsMatrix = m_massMatrix * ( 1.f / (m_timeStep * m_timeStep));
-	m_rhsMasses.setZero(m_numVertices);
+	m_rhsMasses.resize(m_numVertices);
 	for (int v = 0; v < m_numVertices; v++) {
 		m_rhsMasses(v) = m_vertexMasses(v) / (m_timeStep * m_timeStep);
 	}
