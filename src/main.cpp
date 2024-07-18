@@ -53,7 +53,7 @@ SOFTWARE.
 
 /* Constructs a simulator object, sets constraints, adds gravity, a floor with friction and
 triggers the precomputation. */
-ProjDynSimulator *initSimulator(PD::PDPositions verts, PD::PDTriangles faces, PD::PDPositions velos, std::string meshURL,
+ProjDynSimulator *initSimulator(PD::PDPositions verts, PD::PDTriangles faces, PD::PDPositions velos, std::string meshCharacter,
 								double timeStep,
 								int numberPositionPCAModes, std::string pca_basesDir,
 								int numberNonlinearSPLOCSModes, std::string splocs_basesDir,
@@ -77,7 +77,7 @@ ProjDynSimulator *initSimulator(PD::PDPositions verts, PD::PDTriangles faces, PD
 							 numberSamplesForVertexPosSubspace, radiusMultiplierForVertexPosSubspace,
 							 dimensionOfConstraintProjectionsSubspace, radiusMultiplierForConstraintProjectionsSubspace,
 							 numberSampledConstraints,
-							 2, 0, true, meshURL,
+							 2, 0, true, meshCharacter,
 							 0., 3);
 
 	// For the simulation to be meaningful we need some sorts of constraints
@@ -398,16 +398,11 @@ int main()
 				m_png_frames_directory = m_png_frames_directory + "png/";
 				if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 				{
-					std::cout << "Creeating PNG directory !: " << m_png_frames_directory << std::endl;
+					std::cout << "Creating PNG directory !: " << m_png_frames_directory << std::endl;
 				}
 			}
 		}
 	}
-	else
-	{
-		std::cout << "Warning: PNG directory already exists!: " << m_png_frames_directory << std::endl;
-	}
-
 	// Directories where bases are stored
 	std::string pca_basesDir = "../../../bases/" + meshName + "/_gravitationalFall/q_bases/PCA" + SNAPBASES_POSITION_ALIGNMENT  + SNAPBASES_POSITION_WEIGHTING +
 								SNAPBASES_POSITION_SUPPORT + SNAPBASES_POSITION_ORTHOGONAL + "_Release/200outOf200_Frames_/1_increment_200" + SNAPBASES_POSITION_ALIGNMENT + "_bases/using_F_200";
@@ -452,7 +447,7 @@ int main()
 		// PCA reduction-methods parameters
 		//
 		// 1. For position subspaces, use only one methods of the following:
-		int numberPositionPCAModes = 80;				            // number of PCA bases/modes for position subspace construction (0. means the method is off)
+		int numberPositionPCAModes = 0;				            // number of PCA bases/modes for position subspace construction (0. means the method is off)
 		int numberPositionSPLOCSModes = 0;				        // number of SPLOCS bases/modes for position subspace construction (0. means the method is off)
 
 		// TODO: 2. For constaints reduction 
@@ -509,7 +504,7 @@ int main()
 		if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace == 0 \
 			&& dimensionOfConstraintProjectionsSubspace == 0 && numberNonlinearDEIMModes == 0)
 		{
-			simCase = "FOM/";
+			simCase = "FOM";
 		}
 		else {
 			simCase = simCase + "/";
@@ -520,16 +515,13 @@ int main()
 		{
 			std::cout << "PNG directory created!: " << m_png_frames_directory << std::endl;
 		}
-		else {
-			std::cout << "PNG directory for specific case already exsits, will be over-written!: " << m_png_frames_directory << std::endl;
-		}
 
 
 		// Start a viewer that uses a simple plugin to draw the simulated mesh
 		// (it does numIterations local/global steps to simulate the next timestep
 		// before drawing the mesh).
 		
-		SimViewer simViewer(verts, faces, velos, meshURL, m_png_frames_directory, numIterations, timeStep,
+		SimViewer simViewer(verts, faces, velos, meshName, m_png_frames_directory, numIterations, timeStep,
 			                numberPositionPCAModes, pca_basesDir,
 							numberPositionSPLOCSModes, splocs_basesDir,
 							numberSamplesForLBSVertexPosSubspace,

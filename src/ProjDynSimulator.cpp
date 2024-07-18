@@ -83,8 +83,8 @@ ProjDynSimulator::ProjDynSimulator
 	m_parallelVUpdate(false),
 	m_parallelVUpdateBSize(PROJ_DYN_VPOS_BLOCK_SIZE),
 
-	m_meshURL(meshURL),
-	m_meshName(PD::getMeshName(meshURL)),
+	//m_meshURL(meshURL),
+	m_meshName(meshURL),
 	m_numTets(0),
 	m_hasTetrahedrons(false),
 	m_rayleighDampingAlpha(dampingAlpha),
@@ -1846,11 +1846,87 @@ void ProjDynSimulator::optimizedSetup() {
 		// LBS reduction for position space:
 		lbsPosSetup();
 	}
-	else if (!m_usingPosSubspaces){
+	else if (!m_usingPosSubspaces){  
 		// No reduction for position space:
 		fullPosSetup();
 	}
 	
+	/* Second for constarints projections full space or reduced subspace case*/
+	if (m_rhsInterpolation) {
+		lbsConstarintsSetup();
+	}
+	else if (m_usingQDEIMComponents) {
+	
+	}
+	else { 
+		// No reduction for constraints´ projections space:
+		// In this case, no pre-computations are required, we only extend the snapshots dir name
+		m_meshSnapshotsDirectory = m_meshSnapshotsDirectory +"noConstraintProjReduction/";
+		if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+		{
+			std::cout << "Snapshots directory ready!: " << m_meshSnapshotsDirectory << std::endl;
+		}
+		std::cout << "Pre-computation case: Full simulations for constraint projection" << std::endl;
+	
+	}
+
+	// Now, all sampled constraints should have been added and the used vertices can be updated,
+	// and the constraints can be updated to use this list
+
+	/* note: rhsInterpolation uses a subset of the vertices used by skinning subspaces:
+	--> Therefore, in case rhsInterpolation we just updateUsedVertices,
+			in case m_usingSkinSubspaces we need to add the rest of the vertices from m_samples then updateUsedVertices,
+			while, otherwise in case of full simulations or POD subspaces we need all verties.
+			TODO: consider a list of vertices when using splocs zum beispiel!
+	*/
+
+	if (m_rhsInterpolation && m_usingSkinSubspaces) {
+		//std::cout << "Determining used vertices..." << std::endl;
+		updateUsedVertices();
+	}
+	else if (m_usingSkinSubspaces) {
+		for (unsigned int v : m_samples) {
+			m_additionalUsedVertices.push_back(v);
+		}
+		updateUsedVertices();
+	}
+	else if (m_rhsInterpolation && m_usePosSnapBases) {
+
+		for (unsigned int v : m_constraintVertexSamples) { // here we use only constraint samples
+			m_additionalUsedVertices.push_back(v);
+		}
+		/*
+		for (unsigned int v = 0; v < m_numVertices; v++) {
+			m_additionalUsedVertices.push_back(v);
+		}*/
+		updateUsedVertices();
+
+	}
+	else {
+		m_usedVertices.clear();
+		for (unsigned int v = 0; v < m_numVertices; v++) {
+			m_usedVertices.push_back(v);
+		}
+	}
+
+	m_recomputeFactorization = false;
+
+	m_collidedVerts = new bool[m_numVertices];
+
+	for (int i = 0; i < m_numVertices; i++) m_collidedVerts[i] = false;
+
+	m_isSetup = true;
+	m_collisionCorrection = false;
+	//m_planeBounceCorrection = false;
+	m_grippedVertices.clear();
+
+	m_initialPos = m_positions;
+	m_initialPosSub = m_positionsSubspace;
+
+	// Precompute the weighted external forces that will appear on the rhs
+	recomputeWeightedForces();
+
+
 
 	m_precomputationStopWatch.stopStopWatch();
 
@@ -2093,6 +2169,7 @@ void ProjDynSimulator::setup() {
 					m_baseXFunctionsSquaredSparse = m_basesFunctionsTSparse[0] * m_massMatrix * m_basesFunctionsSparse[0];
 					m_baseYFunctionsSquaredSparse = m_basesFunctionsTSparse[1] * m_massMatrix * m_basesFunctionsSparse[1];
 					m_baseZFunctionsSquaredSparse = m_basesFunctionsTSparse[2] * m_massMatrix * m_basesFunctionsSparse[2];
+					
 
 #pragma omp parallel
 #pragma omp single nowait
@@ -2755,7 +2832,6 @@ void ProjDynSimulator::setup() {
 		}
 		
 		
-		// when rhsInterpolation
 		// After the lhs has been constructed, if flat bending is desired,
 		// the bending constraints can now be thrown away! (?)
 		if (m_flatBending) {
@@ -2992,7 +3068,7 @@ void ProjDynSimulator::fullPosSetup() {
 	assert(!m_usingSkinSubspaces && !m_usingPODPosSubspaces && !m_usingSPLOCSPosSubspaces);
 	std::cout << "Pre-computations: FullSpace position ..." << std::endl;
 
-	m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "no_posReduction";
+	m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "noPosReduction_";
 
 	// Collect constraints for building global system
 	std::vector< ProjDynConstraint* >* usedConstraints = &m_constraints;
@@ -3043,8 +3119,6 @@ void ProjDynSimulator::fullPosSetup() {
 		std::cout << "Warning: Factorization denseSolver of LHS matrix for global system was not successful!.. make sure PROJ_DYN_SPARSIFY is set TRUE!" << std::endl;
 	}
 		
-	/*
-	// when rhsInterpolation
 	// After the lhs has been constructed, if flat bending is desired,
 	// the bending constraints can now be thrown away! (?)
 	if (m_flatBending) {
@@ -3054,29 +3128,9 @@ void ProjDynSimulator::fullPosSetup() {
 				m_constraints.erase(bc);
 			}
 		}
-	}*/
-
-	m_recomputeFactorization = false;
-
-	// Now, all sampled constraints should have been added and the used vertices can be updated,
-	// and the constraints can be updated to use this list
-	m_usedVertices.clear();
-	for (unsigned int v = 0; v < m_numVertices; v++) {
-		m_usedVertices.push_back(v);
 	}
 
-	// No collision or gripp at the start
-	m_collidedVerts = new bool[m_numVertices];
-	for (int i = 0; i < m_numVertices; i++) m_collidedVerts[i] = false;
-
-	m_isSetup = true;
-	m_collisionCorrection = false;
-	m_grippedVertices.clear();
-
-	m_initialPos = m_positions;
-	// Precompute the weighted external forces that will appear on the rhs
-	recomputeWeightedForces();
-}  // end of precomputation for case no-PosReduction
+}  // end of precomputation for case position no-PosReduction
 
 void ProjDynSimulator::lbsPosSetup() {
 	// Assert only LBS position reduction method is used
@@ -3170,7 +3224,8 @@ void ProjDynSimulator::lbsPosSetup() {
 	// LHSprojected momentum term
 	// m_subspaceLHS_inner = Sum_i U.T lambda_i S_i.T S_i U
 	m_subspaceLHS_inner = m_baseFunctionsTransposed * conMat * m_baseFunctions;
-	/*
+
+	
 	// In case of flat bending, there is no bending constraint group but the bending terms
 	// still need to be added to the lhs
 	if (m_flatBending && !m_bendingConstraints.empty()) {
@@ -3182,16 +3237,15 @@ void ProjDynSimulator::lbsPosSetup() {
 			}
 			m_subspaceLHS_inner += tmp;
 		}
-	} */
+	} 
 
-	/*
 	// Additional constraints: we then add more terms to m_subspaceLHS_inner.
 	for (auto c : m_additionalConstraints) {
 		PDMatrix tmp = (m_baseFunctionsTransposed * c->getSelectionMatrixTransposed()) * (c->getSelectionMatrix() * m_baseFunctions);
 		tmp *= c->getWeight();
 		m_subspaceLHS_inner += tmp;
 	}
-	*/
+	
 
 	m_lhsMatrixSampled = m_subspaceLHS_mom + m_subspaceLHS_inner;    // m_lhsMatrixSampled = (1/ h^2) U.T M U + Sum_i U.T lambda_i S_i.T S_i U
 	
@@ -3224,8 +3278,6 @@ void ProjDynSimulator::lbsPosSetup() {
 		}
 	}
 
-	/*
-	// when rhsInterpolation
 		// After the lhs has been constructed, if flat bending is desired,
 		// the bending constraints can now be thrown away! (?)
 		if (m_flatBending) {
@@ -3236,30 +3288,6 @@ void ProjDynSimulator::lbsPosSetup() {
 				}
 			}
 		}
-	*/
-
-	m_recomputeFactorization = false;
-
-	// Now, all sampled constraints should have been added and the used vertices can be updated,
-	// In case LBS for positions we need to add the rest of the vertices from m_samples then updateUsedVertices
-	for (unsigned int v : m_samples) {
-		m_additionalUsedVertices.push_back(v);
-	}
-	updateUsedVertices();
-
-	m_collidedVerts = new bool[m_numVertices];
-	for (int i = 0; i < m_numVertices; i++) m_collidedVerts[i] = false;
-
-	m_isSetup = true;
-	m_collisionCorrection = false;
-	//m_planeBounceCorrection = false;
-	m_grippedVertices.clear();
-
-	m_initialPos = m_positions;
-	m_initialPosSub = m_positionsSubspace;
-
-	// Precompute the weighted external forces that will appear on the rhs
-	recomputeWeightedForces();
 } // end of precomputation for LBS for position case
 
 void ProjDynSimulator::snapBasesPosSetup() {
@@ -3382,6 +3410,7 @@ void ProjDynSimulator::snapBasesPosSetup() {
 				for (int dim = 0; dim < 3; dim++) {
 					m_baseFunctionsSquaredSparse[dim] = m_basesFunctionsSquared[dim].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
 				}
+
 
 #pragma omp parallel
 #pragma omp single nowait
@@ -3552,11 +3581,15 @@ void ProjDynSimulator::snapBasesPosSetup() {
 		std::cout << "Warning: Factorization denseSolver X/Y/Z of LHS matrix for global system was not successful!.." << std::endl;
 	}
 
-	m_recomputeFactorization = false;
-
-	m_usedVertices.clear();
-	for (unsigned int v = 0; v < m_numVertices; v++) {
-		m_usedVertices.push_back(v);
+	// After the lhs has been constructed, if flat bending is desired,
+		// the bending constraints can now be thrown away! (?)
+	if (m_flatBending) {
+		for (ProjDynConstraint* c : m_bendingConstraints) {
+			auto const& bc = std::find(m_constraints.begin(), m_constraints.end(), c);
+			if (bc != m_constraints.end()) {
+				m_constraints.erase(bc);
+			}
+		}
 	}
 
 	if (m_useSparseMatricesForSubspace) {
@@ -3586,23 +3619,114 @@ void ProjDynSimulator::snapBasesPosSetup() {
 	
 	std::cout << "First RHS term has been also sparsified.." << std::endl;
 	}
+} // end of pre-computations for position snapBases reduction
 
-	m_collidedVerts = new bool[m_numVertices];
 
-	PROJ_DYN_PARALLEL_FOR
-		for (int i = 0; i < m_numVertices; i++) m_collidedVerts[i] = false;
+void ProjDynSimulator::lbsConstarintsSetup() {
 
-	m_isSetup = true;
-	m_collisionCorrection = false;
-	//m_planeBounceCorrection = false;
-	m_grippedVertices.clear();
+	assert(m_rhsInterpolation);
+	// TODO: assert no other methods to reduce constriants projectons
+	assert(!m_usingQDEIMComponents);
 
-	m_initialPos = m_positions;
-	m_initialPosSub = m_positionsSubspace;
+	m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "ConsProjLBS/";
+	std::cout << "Pre-computation case: LBS for constraint projection" << std::endl;
 
-	// Precompute the weighted external forces that will appear on the rhs
-	recomputeWeightedForces();
-}
+	if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+	{
+		std::cout << "Snapshots directory ready!: " << m_meshSnapshotsDirectory << std::endl;
+	}
+	
+	std::vector< ProjDynConstraint* >* usedConstraints = &m_constraints;
+	std::vector< ProjDynConstraint* > collectedConstr;
+
+	std::cout << "Collecting constraints for interpolation..." << std::endl;
+	collectedConstr.clear();
+	for (ProjDynConstraint* c : m_bendingConstraints) {
+		collectedConstr.push_back(c);
+	}
+
+	for (ProjDynConstraint* c : m_strainConstraints) {
+		collectedConstr.push_back(c);
+	}
+
+	for (ProjDynConstraint* c : m_collisionConstraints) {
+		collectedConstr.push_back(c);
+	}
+
+	for (ProjDynConstraint* c : m_tetStrainConstraints) {
+		
+		collectedConstr.push_back(c);
+	}
+
+	for (ProjDynConstraint* c : m_additionalConstraints) {
+		collectedConstr.push_back(c);
+	}
+
+	usedConstraints = &collectedConstr;
+
+	// Here we create a preliminary sampling of elements which are used
+	// to choose which constraints should be evaluated.
+	// These will be overwritten if constraint groups are used
+	// that suggest DEIM samples.
+	std::cout << "Sampling constraints...";
+	createConstraintSampling(m_numConstraintSamples);
+
+	std::cout << "Initiating snapshot groups for constraints ... " << std::endl;
+	m_snapshotGroups.clear();
+	// RHSInterpolationGroup initializes the full set of constraints 
+	if (!m_springConstraints.empty()) {
+		m_snapshotGroups.push_back(RHSInterpolationGroup("spring", m_springConstraints, m_positions,
+			m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
+	}
+	if (!m_bendingConstraints.empty() && !m_flatBending) {
+		m_snapshotGroups.push_back(RHSInterpolationGroup("bend", m_bendingConstraints, m_positions,
+			m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
+	}
+	if (!m_strainConstraints.empty()) {
+		m_snapshotGroups.push_back(RHSInterpolationGroup("strain", m_strainConstraints, m_positions,
+			m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
+	}
+	if (!m_tetStrainConstraints.empty()) {
+		m_snapshotGroups.push_back(RHSInterpolationGroup("tetstrain", m_tetStrainConstraints, m_positions,
+			m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
+	}
+	if (!m_tetExConstraints.empty()) {
+		m_snapshotGroups.push_back(RHSInterpolationGroup("tetex", m_tetExConstraints, m_positions,
+			m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
+	}
+
+	// If snapshot groups are used they need to be initialized
+	for (auto& g : m_snapshotGroups) {
+		// Initialization of the group depends on the constraint that's being used
+		// initialize the reduced constraints projection for each group
+		if (g.getName() == "bend") {
+			initRHSInterpolGroup(g, m_constraintVertexSamples); //, hessian);
+		}
+		else if (g.getName() == "spring") {
+			initRHSInterpolGroup(g, m_constraintVertexSamples); //, hessian);
+		}
+		else if (g.getName() == "strain") {
+			initRHSInterpolGroup(g, m_constraintTriSamples); //, hessian);
+		}
+		else if (g.getName() == "tetstrain" || g.getName() == "tetex") {
+			initRHSInterpolGroup(g, m_constraintTetSamples); //, hessian);
+		}
+		else {
+			std::cout << "ERROR: unknown rhs interpolation group: " << g.getName() << "!" << std::endl;
+		}
+
+		// Maintain list of constraints that have been sampled
+		std::vector<ProjDynConstraint*>& sampledCons = g.getSampledConstraints();
+		for (ProjDynConstraint* c : sampledCons) m_sampledConstraints.push_back(c);
+
+
+	}
+
+	std::cout << " LBS Snapshot groups for constraints has been initialized!" << std::endl;
+
+} // end of pre-computation for constraints projections LBS
+
+
 
 void ProjDynSimulator::resetPositions() {
 	m_positions = m_initialPos;

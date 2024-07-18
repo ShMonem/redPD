@@ -154,6 +154,9 @@ namespace PD {
 		void lbsPosSetup();
 		void snapBasesPosSetup();
 
+		void lbsConstarintsSetup();
+
+
 		void setExternalForces(PDPositions fExt);
 		void addGravity(PDScalar g);
 		void addFloor(int floorCoordinate, PDScalar floorHeight, PDScalar floorCollisionWeight);
@@ -394,6 +397,8 @@ namespace PD {
 		Eigen::LLT<PDMatrix> m_subspaceYSolver;
 		Eigen::LLT<PDMatrix> m_subspaceZSolver;
 		
+		// std::vector<PDSparseSolver> m_projectToSnapBasesSparseSolver{};
+
 		PDSparseSolver m_subspaceXSparseSolver;
 		PDSparseSolver m_subspaceYSparseSolver;
 		PDSparseSolver m_subspaceZSparseSolver;
@@ -404,18 +409,6 @@ namespace PD {
 		
 		void projectToPODSubspace(PDPositions& b, PDPositions& x, bool isOrthogonal);
 		void projectToSparsePODSubspace(PDPositions& subPos, PDPositions& fullPos, bool isBasisOrthogonal);
-		
-		PDSparseMatrix m_rhsXFirstTermMatrixPreSparse;
-		
-		
-		PDSparseMatrix m_rhsYFirstTermMatrixPreSparse;
-		PDSparseMatrix m_rhsZFirstTermMatrixPreSparse;
-		
-		
-		
-		PDSparseMatrix m_lhsXMatrixSampledSparse;
-		PDSparseMatrix m_lhsYMatrixSampledSparse;
-		PDSparseMatrix m_lhsZMatrixSampledSparse;
 		
 		Eigen::LLT<PDMatrix> m_denseXSolver;
 		Eigen::LLT<PDMatrix> m_denseYSolver;
