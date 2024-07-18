@@ -1856,7 +1856,7 @@ void ProjDynSimulator::optimizedSetup() {
 		lbsConstarintsSetup();
 	}
 	else if (m_usingQDEIMComponents) {
-	
+		//TODO
 	}
 	else { 
 		// No reduction for constraints´ projections space:
@@ -2660,13 +2660,13 @@ void ProjDynSimulator::setup() {
 			// Factorize lhs matrix
 			StopWatch tmpWatch(10, 10);
 			tmpWatch.startStopWatch();
-			m_linearFullLHSinterploRHSSolver.analyzePattern(m_lhsMatrix);
-			m_linearFullLHSinterploRHSSolver.factorize(m_lhsMatrix);
+			m_linearSolver.analyzePattern(m_lhsMatrix);
+			m_linearSolver.factorize(m_lhsMatrix);
 			tmpWatch.stopStopWatch();
 						
 			std::cout << "Factorization of the system matrix took " << tmpWatch.lastMeasurement() << " microseconds." << std::endl;
 			
-			if (m_linearFullLHSinterploRHSSolver.info() != Eigen::Success) {   // I think this case should be included inside "else" above!
+			if (m_linearSolver.info() != Eigen::Success) {   // I think this case should be included inside "else" above!
 			std::cout << "Warning: Factorization denseSolver of LHS matrix for global system was not successful!.. make sure PROJ_DYN_SPARSIFY is set TRUE!" << std::endl;
 			}
 
@@ -4564,7 +4564,7 @@ void ProjDynSimulator::step(int numIterations)
 			else{
 			PROJ_DYN_PARALLEL_FOR
 				for (d = 0; d < 3; d++) {
-					m_positions.col(d) = m_linearFullLHSinterploRHSSolver.solve(m_rhsInterpol.col(d));
+					m_positions.col(d) = m_linearSolver.solve(m_rhsInterpol.col(d));
 					// This solves: for full system with rhsInterpolation only(M/h^2 + Sum S.T S) q =  (M/h^2) s + lambda S.T V p
 					//		and for nonlinear part only (M/h^2 + Sum S.T S) q =  lambda S.T p  (recording QDEIM snapshots)
 				}
