@@ -630,7 +630,8 @@ void PD::ProjDynSimulator::evaluatePositionsAtUsedVertices(PDPositions& usedPos,
 
 // resolves collision for all cases:  it changes the matrx "posCorrect" at the desired vertex "v"
 void PD::ProjDynSimulator::resolveCollision(unsigned int v, PDPositions & pos, PDPositions & posCorrect)
-{
+{  
+	
 	posCorrect.row(v) = pos.row(v);  // set the correction equal to current position of v
 
 	if (m_floorCollisionWeight > 0) {
@@ -1927,10 +1928,8 @@ void ProjDynSimulator::optimizedSetup() {
 	recomputeWeightedForces();
 
 
-
 	m_precomputationStopWatch.stopStopWatch();
-
-}
+}  // end of optimized pre-computation setup
 
 void ProjDynSimulator::setup() { 
 	
@@ -3727,7 +3726,6 @@ void ProjDynSimulator::lbsConstarintsSetup() {
 } // end of pre-computation for constraints projections LBS
 
 
-
 void ProjDynSimulator::resetPositions() {
 	m_positions = m_initialPos;
 	m_positionsSubspace = m_initialPosSub;
@@ -3774,6 +3772,360 @@ void PD::ProjDynSimulator::releaseGrip()
 	m_grippedVertices.clear();
 }
 
+void ProjDynSimulator::optimizedStep(int numIterations) {
+	m_numIterations = numIterations;
+	m_totalStopWatch.startStopWatch();
+
+	if (!m_isSetup) {
+		std::cout << "Constraints or external forces have changed since last setup call, therefore setup() will be called now!" << std::endl;
+		setup();
+	}
+
+	PDPositions s;     // s = q(t) + h v(t) + h^2 M^(-1) f_{ext}
+	PDPositions oldPos, oldFullPos;
+
+	/****************************************************/
+	/* Compute s and handle collisions/user interaction */
+	m_surroundingBlockStopWatch.startStopWatch();
+
+	if (!m_rhsInterpolation) {
+		oldFullPos = m_positions;
+	}
+
+	if (m_usePosSnapBases || m_usingSkinSubspaces) {
+		oldPos = m_positionsSubspace;
+	}
+	else {
+		oldPos = m_positions;
+	}
+
+	// blowup factor
+	PDScalar blowupFac = (10. - m_blowupStrength) / 9.;
+
+	// Initiate position q = s 
+	if (m_usePosSnapBases) {
+		snapBases_compute_s(s, blowupFac);
+	}
+	else if (m_usingSkinSubspaces) {
+		lbsPos_compute_s(s, blowupFac);
+	}
+	else {
+		// No position spave reduction
+		fullPos_compute_s(s, blowupFac);
+	}
+	if (m_constraintSamplesChanged) {
+		if (m_rhsInterpolation || m_usingSkinSubspaces) {
+			updateUsedVertices();
+		}
+		if (m_rhsInterpolation && m_usePosSnapBases) {
+			updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);     // update at used vertices only = true
+		}
+		if (m_usingSkinSubspaces) {
+			updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);    // update at used vertices only = true
+		}
+	}
+	
+	std::vector< ProjDynConstraint* >* usedConstraints;
+	if (m_rhsInterpolation ) {
+
+		usedConstraints = &m_sampledConstraints;
+	}
+	else if (m_usingQDEIMComponents) {
+		// TODO
+	}
+	else {
+		usedConstraints = &m_constraints;
+	}
+
+	int numConstraints = usedConstraints->size();
+
+	std::vector< PDPositions > currentAuxilaries(numConstraints);
+	m_surroundingBlockStopWatch.stopStopWatch();
+	/****************************************************/
+
+	/****************************************************/
+	/* ------------ Main solver iterations ------------ */
+
+	for (int i = 0; i < numIterations; i++) {
+
+		//************************************//
+		// Local step: Constraint projections //
+		//************************************//
+		m_localStepStopWatch.startStopWatch();
+
+		/* Start by computing the local term : */
+		if (m_rhsInterpolation) { // Local step approximation via fitting method with/out pos reduction
+			m_localStepOnlyProjectStopWatch.startStopWatch();
+
+			if (m_usingSkinSubspaces) { 
+				rhs2.setZero();
+				for (auto& g : m_snapshotGroups)
+					g.approximateRHS(m_positionsUsedVs, rhs2, m_collidedVerts);
+				addAdditionalConstraints(m_positionsUsedVs, rhs2, m_collidedVerts);
+				//rhs 2= lambda U.T S.T V p
+			}
+			else if (m_usePosSnapBases) {				
+				m_rhsInterpol.resize(m_positions.rows(), 3);
+				for (auto& g : m_snapshotGroups) {
+					g.approximateRHS(m_positionsUsedVs, m_rhsInterpol, m_collidedVerts);  
+				}
+				addAdditionalConstraints(m_positionsUsedVs, m_rhsInterpol, m_collidedVerts);
+				//  m_rhsInterpol = lambda S.T V p (computed for the samples only)
+
+			}
+			else {   
+				m_rhsInterpol.resize(m_positions.rows(), 3);
+				for (auto& g : m_snapshotGroups)
+					g.approximateRHS(m_positions, m_rhsInterpol, m_collidedVerts);
+				addAdditionalConstraints(m_positions, m_rhsInterpol, m_collidedVerts);
+				// m_rhsInterpol = lambda S.T V p    no pos reduction (computed for full positions)   // TODO: compute only at samples
+			}
+
+			m_localStepOnlyProjectStopWatch.stopStopWatch();
+		}
+		else if (m_usingQDEIMComponents) {
+
+			m_localStepOnlyProjectStopWatch.startStopWatch();
+
+
+
+			m_localStepOnlyProjectStopWatch.stopStopWatch();
+		}
+		else {
+			// Compute full local constaints projections
+
+			if (recordingPSnapshots) {
+				// TODO
+			}
+			else {
+				
+				m_localStepOnlyProjectStopWatch.startStopWatch();
+#pragma omp parallel for num_threads(PROJ_DYN_NUM_THREADS)
+				for (int ind = 0; ind < numConstraints; ind++) {
+					ProjDynConstraint* c = usedConstraints->at(ind);
+					int didCollide = -1;
+					currentAuxilaries[ind] = c->getP(m_positions, didCollide);
+					if (didCollide >= 0) m_collidedVerts[didCollide] = true;
+				}
+
+				m_rhs.setZero();
+				PROJ_DYN_PARALLEL_FOR
+					for (int d = 0; d < 3; d++) {
+						for (int mind = 0; mind < numConstraints; mind++) {
+							PDScalar curWeight = usedConstraints->at(mind)->getWeight();
+							fastDensePlusSparseTimesDenseCol(m_rhs, usedConstraints->at(mind)->getSelectionMatrixTransposed(), currentAuxilaries[mind], d, curWeight);
+						}
+					}
+				// here m_rhs = lambda S.T p
+
+				m_localStepOnlyProjectStopWatch.stopStopWatch();
+			}
+		}  // End of projection term computations
+
+		m_localStepRestStopWatch.startStopWatch();  // TODO: make sure was closed later
+
+
+		/* Assembling momentum term */
+		m_momentumStopWatch.startStopWatch();
+
+
+
+		m_momentumStopWatch.stopStopWatch();
+
+
+
+		m_localStepStopWatch.startStopWatch();
+		//************************************
+
+
+
+	}
+	/****************************************************/
+
+
+	m_totalStopWatch.stopStopWatch();
+}
+
+void ProjDynSimulator::fullPos_compute_s(PDPositions s, PDScalar blowupFac) {
+
+	// Compute s:  //note: s = q(t) + h v(t) + h^2 M^(-1) f_{ext}, and here q and v are in the full space
+	s = m_positions + m_timeStep * m_velocities + m_fExtWeighted + blowupFac * m_fGravWeighted;
+
+	if (m_rayleighDampingAlpha > 0) {
+		s = s - m_timeStep * m_rayleighDampingAlpha * m_velocities;
+	}
+
+	//resolve collision
+	PROJ_DYN_PARALLEL_FOR
+		for (int v = 0; v < m_positions.rows(); v++) {
+			resolveCollision(v, s, m_positionCorrections);
+		}
+
+	// Change position of gripped vertices
+	if (m_grippedVertices.size() > 0) {
+		for (unsigned int i = 0; i < m_grippedVertices.size(); i++) {
+			s.row(m_grippedVertices[i]) = m_grippedVertexPos.row(i);
+		}
+	}
+	// initialize full positions
+	m_positions = s;
+}
+
+void ProjDynSimulator::lbsPos_compute_s(PDPositions s, PDScalar blowupFac) {
+
+	// If there has been a collision in the last step, handle repulsion and friction:
+	if (m_collisionCorrection) {
+
+		if (m_rhsInterpolation) {
+			// Get actual velocities only for used vertices
+			updatePositionsSampling(m_velocitiesUsedVs, m_velocitiesSubspace, true);
+			// Handel collision
+			handelTangentialMovementAndRepilsion_usedVertices();
+			// Get m_velocitiesSubspace from used vertices
+			projectUsedVerticesToLBSSubspace();
+		}
+		else {
+			// Handel collision
+			handelTangentialMovementAndRepilsion_allVertices();
+			// Get m_velocitiesSubspace from all vertices
+			projectToSubspace(m_velocitiesSubspace, m_velocities, false);
+		}
+	}
+
+	// compute s in the reduced subspace
+	get_reduced_s(s, blowupFac);
+
+	// s is also the initial guess for the updated sub/positions
+	m_positionsSubspace = s;
+
+	// Compute vertex positions on vertices involved in the computation of sampled constraints
+	updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
+
+	// Correct vertex positions of gripped and collided vertices
+	handleGripAndCollisionsUsedVs(s, true);       // true means to update the vertices after handling collection 
+}
+
+void ProjDynSimulator::get_reduced_s(PDPositions s, PDScalar blowupFac) {
+	// Compute s in reduced subspace: s = q(t) + h v(t) + h^2 M^(-1) f_{ext}, here q and v are in the subspace
+	s = m_positionsSubspace + m_timeStep * m_velocitiesSubspace + m_fExtWeightedSubspace + blowupFac * m_fGravWeightedSubspace;
+	if (m_rayleighDampingAlpha > 0) {
+		s = s - m_timeStep * m_rayleighDampingAlpha * m_velocitiesSubspace;
+	}
+}
+
+void ProjDynSimulator::snapBases_compute_s(PDPositions s, PDScalar blowupFac) {
+
+	if (m_rhsInterpolation) {
+		// Get actual velocities only for used vertices
+		updatePODPositionsSampling(m_velocitiesUsedVs, m_velocitiesSubspace, true);    // podUsedVerticesOnly = true
+		// Handel collision
+		handelTangentialMovementAndRepilsion_usedVertices();
+		// Get m_velocitiesSubspace from used vertices
+		projectUsedVerticesToSnapBasesSubspace();
+	}
+	else if(m_usingQDEIMComponents) {
+		// TODO
+	}
+	else {
+		// Get actual velocities for all vertices
+		updatePODPositionsSampling(m_velocities, m_velocitiesSubspace, false);
+		// Handel collision
+		handelTangentialMovementAndRepilsion_allVertices();
+		// Project full velocities back to subspace after they were updated due to collision
+		if (m_useSparseMatricesForSubspace) {
+			projectToSparsePODSubspace(m_velocitiesSubspace, m_velocities, isPosSnapBasesOrtho);
+		}
+		else {
+			projectToPODSubspace(m_velocitiesSubspace, m_velocities, isPosSnapBasesOrtho);
+		}
+	}
+
+	// compute s in the reduced subspace
+	get_reduced_s(s, blowupFac);
+
+	// s is also the initial guess for the updated sub/positions
+	m_positionsSubspace = s;
+
+	if (m_rhsInterpolation) {
+		updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
+		handleGripAndCollisionsUsedVs(s, true);
+	}
+	else if (m_usingQDEIMComponents) {
+		// TODO
+	}
+	else {
+		updatePODPositionsSampling(m_positions, m_positionsSubspace, false);
+		handleGripAndCollisionsUsedVs(s, false);
+	}
+
+}
+
+void ProjDynSimulator::projectUsedVerticesToSnapBasesSubspace() {
+
+	// Project full velocities back to subspace via interpolation of the velocities on used vertices
+	if (m_useSparseMatricesForSubspace) {
+		#pragma omp parallel
+		#pragma omp single nowait
+			{
+		#pragma omp task
+				m_velocitiesSubspace.col(0) = m_usedVertexXInterpolatorSparse.solve(m_usedVertexXInterpolatorRHSMatrixSparse * m_velocitiesUsedVs.col(0));
+		#pragma omp task
+				m_velocitiesSubspace.col(1) = m_usedVertexYInterpolatorSparse.solve(m_usedVertexYInterpolatorRHSMatrixSparse * m_velocitiesUsedVs.col(1));
+		#pragma omp task
+				m_velocitiesSubspace.col(2) = m_usedVertexZInterpolatorSparse.solve(m_usedVertexZInterpolatorRHSMatrixSparse * m_velocitiesUsedVs.col(2));
+			}
+	}
+	else {
+	#pragma omp parallel
+	#pragma omp single nowait
+		{
+	#pragma omp task
+			m_velocitiesSubspace.col(0) = m_usedVertexXInterpolator.solve(m_usedVertexXInterpolatorRHSMatrix * m_velocitiesUsedVs.col(0));
+	#pragma omp task
+			m_velocitiesSubspace.col(1) = m_usedVertexYInterpolator.solve(m_usedVertexYInterpolatorRHSMatrix * m_velocitiesUsedVs.col(1));
+	#pragma omp task
+			m_velocitiesSubspace.col(2) = m_usedVertexZInterpolator.solve(m_usedVertexZInterpolatorRHSMatrix * m_velocitiesUsedVs.col(2));
+		}
+	}
+}
+void ProjDynSimulator::projectUsedVerticesToLBSSubspace() {
+	// Project used velocities back to subspace via interpolation of the velocities on used vertices
+	PROJ_DYN_PARALLEL_FOR
+		for (int d = 0; d < 3; d++) {
+			if (m_useSparseMatricesForSubspace) {
+				m_velocitiesSubspace.col(d) = m_usedVertexInterpolatorSparse.solve(m_usedVertexInterpolatorRHSMatrixSparse * m_velocitiesUsedVs.col(d));
+			}
+			else {
+				m_velocitiesSubspace.col(d) = m_usedVertexInterpolator.solve(m_usedVertexInterpolatorRHSMatrix * m_velocitiesUsedVs.col(d));
+			}
+		}
+
+}
+void ProjDynSimulator::handelTangentialMovementAndRepilsion_allVertices() {
+	PROJ_DYN_PARALLEL_FOR
+		for (int v = 0; v < m_numVertices; v++) {
+			if (m_positionCorrections.row(v).norm() > 1e-12) {
+				PDVector tangentialV = m_velocities.row(v) - m_velocities.row(v).dot(m_positionCorrections.row(v)) * m_positionCorrections.row(v);
+				tangentialV *= (1. - m_frictionCoeff);
+				tangentialV += m_positionCorrections.row(v) * m_repulsionCoeff;
+				m_velocities.row(v) = tangentialV;
+			}
+		}
+}
+void ProjDynSimulator::handelTangentialMovementAndRepilsion_usedVertices() {
+
+	// Remove tangential movement and add repulsion movement from collided vertices
+	PROJ_DYN_PARALLEL_FOR
+		for (int v = 0; v < m_velocitiesUsedVs.rows(); v++) {
+			if (m_positionCorrectionsUsedVs.row(v).norm() > 1e-12) {
+				PDVector tangentialV = m_velocitiesUsedVs.row(v) - m_velocitiesUsedVs.row(v).dot(m_positionCorrectionsUsedVs.row(v)) * m_positionCorrectionsUsedVs.row(v);
+				tangentialV *= (1. - m_frictionCoeff);
+				tangentialV += m_positionCorrectionsUsedVs.row(v) * m_repulsionCoeff;
+				m_velocitiesUsedVs.row(v) = tangentialV;
+			}
+		}
+
+}
 
 void ProjDynSimulator::step(int numIterations)
 {
@@ -3813,7 +4165,7 @@ void ProjDynSimulator::step(int numIterations)
 		
 		// If there has been a collision in the last step, handle repulsion and friction:
 		if (m_collisionCorrection) { 
-			
+
 			if(m_rhsInterpolation){
 				// Get actual velocities for used vertices
 				updatePositionsSampling(m_velocitiesUsedVs, m_velocitiesSubspace, true);
@@ -3828,7 +4180,6 @@ void ProjDynSimulator::step(int numIterations)
 						}
 					}
 				// Project full velocities back to subspace via interpolation of the velocities on used vertices
-			
 				PROJ_DYN_PARALLEL_FOR
 					for (int d = 0; d < 3; d++) {
 						if (m_useSparseMatricesForSubspace) {

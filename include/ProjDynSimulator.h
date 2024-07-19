@@ -156,6 +156,15 @@ namespace PD {
 
 		void lbsConstarintsSetup();
 
+		void optimizedStep(int numIterations);
+		void fullPos_compute_s(PDPositions s, PDScalar blowupFac);
+		void lbsPos_compute_s(PDPositions s, PDScalar blowupFac);
+		void handelTangentialMovementAndRepilsion_usedVertices();
+		void projectUsedVerticesToLBSSubspace();
+		void handelTangentialMovementAndRepilsion_allVertices();
+		void get_reduced_s(PDPositions s, PDScalar blowupFac);
+		void snapBases_compute_s(PDPositions s, PDScalar blowupFac);
+		void projectUsedVerticesToSnapBasesSubspace();
 
 		void setExternalForces(PDPositions fExt);
 		void addGravity(PDScalar g);

@@ -456,13 +456,13 @@ int main()
 		// LBS reduction parameters
 		// 
 		// 1. For position subspace
-		int numberSamplesForLBSVertexPosSubspace = 0;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
+		int numberSamplesForLBSVertexPosSubspace = 80;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
 		double radiusMultiplierForVertexPosSubspace = 1.1;      // The larger this number, the larger the support of the base functions.
 		
 		// 2. For constraints subspace
-		int dimensionOfConstraintProjectionsSubspace = 120;       // 120; // The constraint projections subspace will be constructed to be twice that size and then condensed via an SVD
+		int dimensionOfConstraintProjectionsSubspace = 0;       // 120; // The constraint projections subspace will be constructed to be twice that size and then condensed via an SVD
 		double radiusMultiplierForConstraintProjectionsSubspace = 2.2;     
-		int numberSampledConstraints = 1000;                      // 1000; // Number of constraints that will be evaluated each iteration
+		int numberSampledConstraints = 0;                      // 1000; // Number of constraints that will be evaluated each iteration
 		                                                       //  this number needs to be zero in order to do no reduction for constraint projection
 		double massPerUnitArea = 2.;
 		double dampingAlpha = 0;
