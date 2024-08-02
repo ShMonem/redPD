@@ -166,6 +166,18 @@ namespace PD {
 		void snapBases_compute_s(PDPositions s, PDScalar blowupFac);
 		void projectUsedVerticesToSnapBasesSubspace();
 
+		void lbsPos_verticesFullUpdate(PDPositions s);
+		void snapBasesPos_verticesFullUpdate(PDPositions s);
+		StopWatch m_rhsAssemblyStopWatch;
+
+		PDPositions m_RHS;
+		PDPositions m_STp;
+		PDPositions m_STVp;
+		PDPositions m_UTSTp;
+		PDPositions m_UTSTVp;
+
+
+
 		void setExternalForces(PDPositions fExt);
 		void addGravity(PDScalar g);
 		void addFloor(int floorCoordinate, PDScalar floorHeight, PDScalar floorCollisionWeight);

@@ -111,6 +111,7 @@ ProjDynSimulator::ProjDynSimulator
 	podUsedVerticesOnly(numConstraintSamples > 0),
 	
 	m_usePosSnapBases(numPosPODModes > 0 || numSPLOCSModes > 0),
+	m_rhsAssemblyStopWatch(10000,10000),
 	//TODO: DEIM part-----------------------------
 	m_numQDEIMModes(0),
 	m_usingQDEIMComponents(false),
@@ -333,8 +334,8 @@ PDPositions& ProjDynSimulator::getVelocities()   // can be for simulation render
 }
 */
 void PD::ProjDynSimulator::recomputeWeightedForces() {
-	m_fExtWeighted.resize(m_numVertices, 3);
-	m_fGravWeighted.resize(m_numVertices, 3);
+	m_fExtWeighted.setZero(m_numVertices, 3);
+	m_fGravWeighted.setZero(m_numVertices, 3);
 	
 	//m_fExt can be set using setExternalForces(PDPositions fExt) in main.cpp , otherwise zeros.
 	// m_fGravity is set using addGravity(PDScalar gravity) in main.cpp, otherwise zeros.
@@ -358,8 +359,8 @@ void PD::ProjDynSimulator::recomputeWeightedForces() {
 	}
 	if (m_usePosSnapBases && m_isSetup && !m_usingSkinSubspaces) {
 		
-		m_fExtWeightedSubspace.resize(m_basesFunctions[0].cols(), 3);
-		m_fGravWeightedSubspace.resize(m_basesFunctions[0].cols(), 3);
+		m_fExtWeightedSubspace.setZero(m_basesFunctions[0].cols(), 3);
+		m_fGravWeightedSubspace.setZero(m_basesFunctions[0].cols(), 3);
 	
 	
 		projectToPODSubspace(m_fExtWeightedSubspace, m_fExtWeighted, false);
@@ -379,7 +380,7 @@ void PD::ProjDynSimulator::projectToSubspace(PDPositions& b, PDPositions& x, boo
 		// (m_baseFunctionsTransposed * m_massMatrix * m_baseFunctions) b = m_baseFunctionsTransposed * m_massMatrix * x
 		// for b: a reduces pos/ velo/..
 		PDPositions rhs = m_baseFunctionsTransposed * m_massMatrix * x;
-		b.resize(m_baseFunctionsTransposed.rows(), 3);
+		b.setZero(m_baseFunctionsTransposed.rows(), 3);
 		for (int d = 0; d < 3; d++) {
 			b.col(d) = m_subspaceSolver.solve(rhs.col(d));  
 		}
@@ -398,7 +399,7 @@ void PD::ProjDynSimulator::projectToSubspace(PDPositions& b, PDPositions& x, boo
 void PD::ProjDynSimulator::projectToPODSubspace(PDPositions& subPos, PDPositions& fullPos, bool isBasisOrthogonal)
 {
 	if(!isBasisOrthogonal){
-		subPos.resize(m_basesFunctionsT[0].rows(), 3);
+		subPos.setZero(m_basesFunctionsT[0].rows(), 3);
 		
 		// projecting in parallel 
 		#pragma omp parallel
@@ -434,7 +435,7 @@ void PD::ProjDynSimulator::projectToSparsePODSubspace(PDPositions& subPos, PDPos
 {
 	if(!isBasisOrthogonal){
 		
-		subPos.resize(m_basesFunctionsTSparse[0].rows(), 3);
+		subPos.setZero(m_basesFunctionsTSparse[0].rows(), 3);
 		
 		// Projecting sparse in parallel
 		#pragma omp parallel
@@ -3330,9 +3331,9 @@ void ProjDynSimulator::snapBasesPosSetup() {
 	// we decople the (X, Y, Z) dimensions and use three matrices so that we solve in parallel for each
 	// slicing m_baseFunctions to m_basesFunctions[0], m_basesFunctions[1] and m_basesFunctions[2] 
 	// m_numPosSnapBasesModes+1: because we add the original mesh as a component too
-	m_basesFunctions[0].resize(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
-	m_basesFunctions[1].resize(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
-	m_basesFunctions[2].resize(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
+	m_basesFunctions[0].setZero(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
+	m_basesFunctions[1].setZero(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
+	m_basesFunctions[2].setZero(m_snapshotsBasesTmp.rows(), m_numPosSnapBasesModes+1);
 
 	if (3 * m_numPosSnapBasesModes != m_snapshotsBasesTmp.cols()) {
 		std::cout << "Sizes are not matching... we have " << m_snapshotsBasesTmp.cols() << " columns and 3*m_numPosSnapBasesModes = " << 3 * m_numPosSnapBasesModes << std::endl;
@@ -3424,8 +3425,8 @@ void ProjDynSimulator::snapBasesPosSetup() {
 		}
 	}
 
-	m_positionsSubspace.resize(m_basesFunctions[0].cols(), 3);
-	m_velocitiesSubspace.resize(m_basesFunctions[0].cols(), 3);
+	m_positionsSubspace.setZero(m_basesFunctions[0].cols(), 3);
+	m_velocitiesSubspace.setZero(m_basesFunctions[0].cols(), 3);
 
 	std::cout << "Projecting positions, velocities and forces into the POD subspace... " << std::endl;
 
@@ -3448,7 +3449,7 @@ void ProjDynSimulator::snapBasesPosSetup() {
 	// in case no position space reduction, or we run full simulation, the solver uses these terms (no projection required)
 	std::cout << "Initiating momentum term of LHS and RHS matrices ..." << std::endl;
 	m_lhsMatrix = m_massMatrix * ( 1.f / (m_timeStep * m_timeStep));
-	m_rhsMasses.resize(m_numVertices);
+	m_rhsMasses.setZero(m_numVertices);
 	for (int v = 0; v < m_numVertices; v++) {
 		m_rhsMasses(v) = m_vertexMasses(v) / (m_timeStep * m_timeStep);
 	}
@@ -3773,12 +3774,12 @@ void PD::ProjDynSimulator::releaseGrip()
 }
 
 void ProjDynSimulator::optimizedStep(int numIterations) {
-	m_numIterations = numIterations;
+	if (m_numIterations < 0) m_numIterations = numIterations;
 	m_totalStopWatch.startStopWatch();
 
 	if (!m_isSetup) {
 		std::cout << "Constraints or external forces have changed since last setup call, therefore setup() will be called now!" << std::endl;
-		setup();
+		optimizedSetup();
 	}
 
 	PDPositions s;     // s = q(t) + h v(t) + h^2 M^(-1) f_{ext}
@@ -3788,12 +3789,11 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 	/* Compute s and handle collisions/user interaction */
 	m_surroundingBlockStopWatch.startStopWatch();
 
-	if (!m_rhsInterpolation) {
-		oldFullPos = m_positions;
-	}
-
 	if (m_usePosSnapBases || m_usingSkinSubspaces) {
 		oldPos = m_positionsSubspace;
+		if (!m_rhsInterpolation) {
+			oldFullPos = m_positions;
+		}
 	}
 	else {
 		oldPos = m_positions;
@@ -3811,7 +3811,9 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 	}
 	else {
 		// No position spave reduction
+		s.setZero(m_positions.rows(), 3);
 		fullPos_compute_s(s, blowupFac);
+		s = m_positions;
 	}
 	if (m_constraintSamplesChanged) {
 		if (m_rhsInterpolation || m_usingSkinSubspaces) {
@@ -3845,6 +3847,9 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 
 	/****************************************************/
 	/* ------------ Main solver iterations ------------ */
+	
+	m_STVp.setZero(m_positions.rows(), 3);
+	
 
 	for (int i = 0; i < numIterations; i++) {
 
@@ -3852,33 +3857,31 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 		// Local step: Constraint projections //
 		//************************************//
 		m_localStepStopWatch.startStopWatch();
-
+		
 		/* Start by computing the local term : */
 		if (m_rhsInterpolation) { // Local step approximation via fitting method with/out pos reduction
 			m_localStepOnlyProjectStopWatch.startStopWatch();
 
-			if (m_usingSkinSubspaces) { 
-				rhs2.setZero();
-				for (auto& g : m_snapshotGroups)
-					g.approximateRHS(m_positionsUsedVs, rhs2, m_collidedVerts);
-				addAdditionalConstraints(m_positionsUsedVs, rhs2, m_collidedVerts);
-				//rhs 2= lambda U.T S.T V p
+			if (m_usingSkinSubspaces) {
+				m_UTSTVp.setZero(m_baseFunctions.cols(), 3);
+				for (auto& g : m_snapshotGroups) {
+					g.approximateRHS(m_positionsUsedVs, m_UTSTVp, m_collidedVerts);
+				}
+				addAdditionalConstraints(m_positionsUsedVs, m_UTSTVp, m_collidedVerts);
+				//constrProjTerm = lambda U.T S.T V p
 			}
 			else if (m_usePosSnapBases) {				
-				m_rhsInterpol.resize(m_positions.rows(), 3);
 				for (auto& g : m_snapshotGroups) {
-					g.approximateRHS(m_positionsUsedVs, m_rhsInterpol, m_collidedVerts);  
+					g.approximateRHS(m_positionsUsedVs, m_STVp, m_collidedVerts);
 				}
-				addAdditionalConstraints(m_positionsUsedVs, m_rhsInterpol, m_collidedVerts);
-				//  m_rhsInterpol = lambda S.T V p (computed for the samples only)
-
+				addAdditionalConstraints(m_positionsUsedVs, m_STVp, m_collidedVerts);
+				//  constrProjTerm = lambda S.T V p (computed for the samples only)
 			}
 			else {   
-				m_rhsInterpol.resize(m_positions.rows(), 3);
 				for (auto& g : m_snapshotGroups)
-					g.approximateRHS(m_positions, m_rhsInterpol, m_collidedVerts);
-				addAdditionalConstraints(m_positions, m_rhsInterpol, m_collidedVerts);
-				// m_rhsInterpol = lambda S.T V p    no pos reduction (computed for full positions)   // TODO: compute only at samples
+					g.approximateRHS(m_positions, m_STVp, m_collidedVerts);
+				addAdditionalConstraints(m_positions, m_STVp, m_collidedVerts);
+				// constrProjTerm = lambda S.T V p    no pos reduction (computed for full positions)   // TODO: compute only at samples
 			}
 
 			m_localStepOnlyProjectStopWatch.stopStopWatch();
@@ -3886,7 +3889,7 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 		else if (m_usingQDEIMComponents) {
 
 			m_localStepOnlyProjectStopWatch.startStopWatch();
-
+			// TODO
 
 
 			m_localStepOnlyProjectStopWatch.stopStopWatch();
@@ -3900,23 +3903,22 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 			else {
 				
 				m_localStepOnlyProjectStopWatch.startStopWatch();
-#pragma omp parallel for num_threads(PROJ_DYN_NUM_THREADS)
+#				pragma omp parallel for num_threads(PROJ_DYN_NUM_THREADS)
 				for (int ind = 0; ind < numConstraints; ind++) {
 					ProjDynConstraint* c = usedConstraints->at(ind);
 					int didCollide = -1;
 					currentAuxilaries[ind] = c->getP(m_positions, didCollide);
 					if (didCollide >= 0) m_collidedVerts[didCollide] = true;
 				}
-
-				m_rhs.setZero();
+				m_RHS.setZero(m_positions.rows(), 3);
 				PROJ_DYN_PARALLEL_FOR
 					for (int d = 0; d < 3; d++) {
 						for (int mind = 0; mind < numConstraints; mind++) {
 							PDScalar curWeight = usedConstraints->at(mind)->getWeight();
-							fastDensePlusSparseTimesDenseCol(m_rhs, usedConstraints->at(mind)->getSelectionMatrixTransposed(), currentAuxilaries[mind], d, curWeight);
+							fastDensePlusSparseTimesDenseCol(m_RHS, usedConstraints->at(mind)->getSelectionMatrixTransposed(), currentAuxilaries[mind], d, curWeight);
 						}
 					}
-				// here m_rhs = lambda S.T p
+				// here constrProjTerm = lambda S.T p
 
 				m_localStepOnlyProjectStopWatch.stopStopWatch();
 			}
@@ -3925,25 +3927,323 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 		m_localStepRestStopWatch.startStopWatch();  // TODO: make sure was closed later
 
 
-		/* Assembling momentum term */
-		m_momentumStopWatch.startStopWatch();
+		/* Assembling rhs */
+		m_rhsAssemblyStopWatch.startStopWatch();
 
+		
+		if (m_usePosSnapBases) {
+			m_RHS.setZero(m_basesFunctionsT[0].rows(), 3);
 
+			if (m_usingQDEIMComponents) {
+				// TODO
 
-		m_momentumStopWatch.stopStopWatch();
+			}
+			else if (m_rhsInterpolation) {
+				// compute  U.T S.T V p 
 
+				// First, transform the r.h.s to the subspace
+				if (m_useSparseMatricesForSubspace) {
+					#pragma omp parallel
+					#pragma omp single nowait
+					{
+					#pragma omp task
+						m_RHS.col(0) = m_basesFunctionsTSparse[0] * m_STVp.col(0);
+					#pragma omp task                                                                 
+						m_RHS.col(1) = m_basesFunctionsTSparse[1] * m_STVp.col(1);
+					#pragma omp task
+						m_RHS.col(2) = m_basesFunctionsTSparse[2] * m_STVp.col(2);
+					}
+				}
+				else {
+					#pragma omp parallel
+					#pragma omp single nowait
+					{
+					#pragma omp task
+						m_RHS.col(0) = m_basesFunctionsT[0] * m_STVp.col(0);
+					#pragma omp task                                                                 
+						m_RHS.col(1) = m_basesFunctionsT[1] * m_STVp.col(1);
+					#pragma omp task
+						m_RHS.col(2) = m_basesFunctionsT[2] * m_STVp.col(2);
+					}
+				}
+			}
+			else {
+				// compute U.T S.T p 
 
+				// First, transform the r.h.s to the subspace
+				if (m_useSparseMatricesForSubspace) {
 
-		m_localStepStopWatch.startStopWatch();
+					#pragma omp parallel
+					#pragma omp single nowait
+						{
+					#pragma omp task
+						m_RHS.col(0) = m_basesFunctionsTSparse[0] * m_STp.col(0);
+					#pragma omp task                                                                         
+						m_RHS.col(1) = m_basesFunctionsTSparse[1] * m_STp.col(1);
+					#pragma omp task
+						m_RHS.col(2) = m_basesFunctionsTSparse[2] * m_STp.col(2);
+						}
+				}
+				else {
+					// TODO: double check!
+					#pragma omp parallel
+					#pragma omp single nowait
+						{
+					#pragma omp task
+						m_RHS.col(0) = m_basesFunctionsT[0] * m_STp.col(0);
+					#pragma omp task                                        
+						m_RHS.col(1) = m_basesFunctionsT[1] * m_STp.col(1);
+					#pragma	omp task
+						m_RHS.col(2) = m_basesFunctionsT[2] * m_STp.col(2);
+					}
+				}
+			
+			}
+
+			// Now we assemb´le rhs terms togather
+			if (m_useSparseMatricesForSubspace) {
+				#pragma omp parallel
+				#pragma omp single nowait
+				{
+				#pragma omp task
+					m_RHS.col(0) += m_projectedRHS_momSparse[0] * s.col(0);  //  //  U.T S.T (p/Vp) + U.T (M/h^2)  s
+				#pragma omp task
+					m_RHS.col(1) += m_projectedRHS_momSparse[1] * s.col(1);
+				#pragma omp task
+					m_RHS.col(2) += m_projectedRHS_momSparse[2] * s.col(2);
+				}
+			}
+			else {
+				#pragma omp parallel
+				#pragma omp single nowait
+				{
+				#pragma omp task
+					m_RHS.col(0) += m_projectedRHS_mom[0] * s.col(0);
+				#pragma omp task	
+					m_RHS.col(1) += m_projectedRHS_mom[1] * s.col(1);
+				#pragma omp task
+					m_RHS.col(2) += m_projectedRHS_mom[2] * s.col(2);
+				}
+			}
+	
+		}
+		else if (m_usingSkinSubspaces){
+			m_RHS.setZero(m_baseFunctionsTransposed.rows(), 3);
+			if (m_rhsInterpolation) {
+				
+				// constraints projections are already projected to position subspace
+				// rhs2 = U.T lambda S.T p 
+				// We add the term from the conservation of momentum
+				PROJ_DYN_PARALLEL_FOR
+					for (int d = 0; d < 3; d++) {
+						if (m_useSparseMatricesForSubspace) {
+							m_RHS.col(d) = m_rhsFirstTermMatrixSparse * s.col(d) + m_UTSTVp.col(d);   // rhs2 = (U^T M s)/h^2 +  U.T lambda S.T V p
+						}
+						else {
+							m_RHS.col(d) += m_rhsFirstTermMatrix * s.col(d) + m_UTSTVp.col(d);
+						}
+					}
+			}
+			else if (m_usingQDEIMComponents) {
+				// TODO:double check possibility
+				std::cout << "At the time of this implementation, we had no intention to combine LBS with DEIM method!!" << std::endl;
+			}
+			else {  
+				// First, project constraints projections to position subspace
+				// here m_rhs = lambda S.T p
+				if (m_useSparseMatricesForSubspace) {
+					m_UTSTp = m_baseFunctionsTransposedSparse * m_STp;  // rhs2 = U.T lambda S.T p 
+				}
+				else {
+					m_UTSTp = m_baseFunctionsTransposed * m_STp;
+				}
+
+				// Now add the term from the conservation of momentum
+				PROJ_DYN_PARALLEL_FOR
+					for (int d = 0; d < 3; d++) {
+						if (m_useSparseMatricesForSubspace) {
+							m_RHS.col(d) = m_rhsFirstTermMatrixSparse * s.col(d) + m_UTSTp.col(d);   // rhs2 = (U^T M s)/h^2 +  U.T lambda S.T p
+						}
+						else {
+							m_RHS.col(d) = m_rhsFirstTermMatrix * s.col(d) + m_UTSTp.col(d);
+						}
+					}
+			}
+		}
+		else {
+		// if not reducing position space
+			// If no subspaces are used, the full rhs from the constraints just needs to be added
+			// to the conservation of momentum terms so that m_rhs = (M/h^2 ) s + lambda S.T p
+			//m_RHS.setZero(m_positions.rows(), 3);
+			if (m_rhsInterpolation) {
+				PROJ_DYN_PARALLEL_FOR
+					for (int v = 0; v < m_numVertices; v++) {
+						for (int d = 0; d < 3; d++) {
+							m_RHS(v, d) = m_STVp(v, d) + m_rhsMasses(v) * s(v, d);   // here m_rhsInterpol = lambda S.T V p + (M/h^2) s
+						}
+					}
+			}
+			else {
+				PROJ_DYN_PARALLEL_FOR
+					for (int v = 0; v < m_numVertices; v++) {
+						for (int d = 0; d < 3; d++) {
+							m_RHS(v, d) += m_rhsMasses(v) * s(v, d);   // here m_rhs = lambda S.T p + (M/h^2) s
+						}
+					}
+			}
+		}
+		m_rhsAssemblyStopWatch.stopStopWatch();
+
+		// now constraints projections are fixed
+		m_localStepStopWatch.stopStopWatch();
 		//************************************
 
 
+		//*****************************************//
+		// Global step: Linear solve for positions //
+		//*****************************************//
+		m_globalStepStopWatch.startStopWatch();
 
+		if (m_usePosSnapBases) {
+			// we solve for the subPostions: (U.T M U/h^2  + lambda U.T S.T S U) q = lambda U.T S.T p + (U.T M U s/ h^2)
+			if (m_useSparseMatricesForSubspace) {
+				#pragma omp parallel
+				#pragma omp single nowait
+				{
+				#pragma omp task
+					m_positionsSubspace.col(0) = m_subspaceXSystemSolverSparse.solve(m_RHS.col(0));
+				#pragma omp task
+					m_positionsSubspace.col(1) = m_subspaceYSystemSolverSparse.solve(m_RHS.col(1));
+				#pragma omp task
+					m_positionsSubspace.col(2) = m_subspaceZSystemSolverSparse.solve(m_RHS.col(2));
+				}
+			}
+			else {
+				/*
+				m_positionsSubspace.col(0) = m_denseXSolver.solve(m_RHS.col(0));
+				m_positionsSubspace.col(1) = m_denseYSolver.solve(m_RHS.col(1));
+				m_positionsSubspace.col(2) = m_denseZSolver.solve(m_RHS.col(2));
+				*/
+				
+				#pragma omp parallel
+				#pragma omp single nowait
+				{
+				#pragma omp task
+					m_positionsSubspace.col(0) = m_denseXSolver.solve(m_RHS.col(0));
+				#pragma omp task
+					m_positionsSubspace.col(1) = m_denseYSolver.solve(m_RHS.col(1));
+				#pragma omp task
+					m_positionsSubspace.col(2) = m_denseZSolver.solve(m_RHS.col(2));
+				}
+			}
+		}
+		else if (m_usingSkinSubspaces) {
+			PROJ_DYN_PARALLEL_FOR
+				for (int d = 0; d < 3; d++) {
+					if (m_useSparseMatricesForSubspace) {
+						m_positionsSubspace.col(d) = m_subspaceSystemSolverSparse.solve(m_RHS.col(d));
+					}
+					else {
+						m_positionsSubspace.col(d) = m_denseSolver.solve(m_RHS.col(d));
+					}
+				}
+		}
+		else {
+			PROJ_DYN_PARALLEL_FOR
+				for (int d = 0; d < 3; d++) {
+					m_positions.col(d) = m_linearSolver.solve(m_RHS.col(d));
+				}
+		}
+
+		m_globalStepStopWatch.stopStopWatch();
+
+		// update positions at used samples
+		m_updatingVPosStopWatch.startStopWatch();
+		if (m_usingPosSubspaces && !(i == numIterations - 1)) {
+			if (m_usingSkinSubspaces && m_rhsInterpolation) {
+				updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);  // update for used vertcies only
+			}
+			else if (m_usePosSnapBases) {
+				//if (!m_rhsInterpolation) updatePODPositionsSampling(m_positions, m_positionsSubspace, podUsedVerticesOnly);       // no local supprt
+				if (m_rhsInterpolation) updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, podUsedVerticesOnly);
+			}
+			//else {   // TODO ??
+			//	updatePositionsSampling(m_positions, m_positionsSubspace, false);       // update for all vertices
+			//} 
+		}  /// how this update is done for full simulations?
+		m_updatingVPosStopWatch.stopStopWatch();
+
+	} // end of local/global solver
+	/****************************************************/
+	// updating samples // TODO: check necesety
+	// handel grip // check effecint
+	if (m_rhsInterpolation && m_collisionFreeDraw) {
+		if (m_usingSkinSubspaces) {
+			updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
+			handleGripAndCollisionsUsedVs(s, false);
+		}
+
+	}
+	else if (m_rhsInterpolation) {
+		if (m_usingSkinSubspaces) s = m_positionsSubspace;
+		if (m_usePosSnapBases) {
+			s = m_positionsSubspace;
+			updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, podUsedVerticesOnly);
+		}
+		handleGripAndCollisionsUsedVs(s, false);
+	}
+	else if (!m_rhsInterpolation && m_usingSkinSubspaces) {
+		updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
+		handleGripAndCollisionsUsedVs(s, false);
 	}
 	/****************************************************/
 
+	/***********************************/
+	// When position subspace is used,
+	// evaluate full positions once so that 
+	// outside methods have access to them
+	// (for e.g. displaying the mesh)
+	m_fullUpdateStopWatch.startStopWatch();
+
+	if (m_usePosSnapBases) {
+		snapBasesPos_verticesFullUpdate(s);  // TODO check efficiency
+	}
+	else if (m_usingSkinSubspaces) {
+		lbsPos_verticesFullUpdate(s);
+	}
+	m_fullUpdateStopWatch.stopStopWatch();
+	/***********************************/
+	// Update Velocities
+	if (m_usingPosSubspaces) {
+
+		if (!m_rhsInterpolation) {
+			// Update full velocities
+			m_velocities = (m_positions - oldFullPos) / m_timeStep;
+		}
+		// Update subspace velocities as well
+		m_velocitiesSubspace = (m_positionsSubspace - oldPos) / m_timeStep;
+	}
+	else {
+		m_velocities = (m_positions - oldPos) / m_timeStep;
+	}
+
+	m_frameCount++;
+	std::cout << "Frame: " << m_frameCount << std::endl;
+
+	// 
+	std::vector<unsigned int>* usedVerts = &m_allVerts;    // usedVerts is a pointer to a vector stores vertices indicies
+	if (m_rhsInterpolation) {
+		usedVerts = &m_constraintVertexSamples;        // OR usedVerts is a pointer to a vector stores constrianed vertices indicies
+	}
+
 
 	m_totalStopWatch.stopStopWatch();
+
+	// if required, store snapshots in ".off" format
+	if (STORE_FRAMES_OFF)
+	{
+		igl::writeOFF(m_meshSnapshotsDirectory + "pos_" + std::to_string(m_frameCount) + ".off", m_positions, m_triangles);
+	}
 }
 
 void ProjDynSimulator::fullPos_compute_s(PDPositions s, PDScalar blowupFac) {
@@ -4060,6 +4360,108 @@ void ProjDynSimulator::snapBases_compute_s(PDPositions s, PDScalar blowupFac) {
 
 }
 
+void ProjDynSimulator::lbsPos_verticesFullUpdate(PDPositions s) {
+
+		if (m_useSparseMatricesForSubspace) {
+#ifdef PROJ_DYN_USE_CUBLAS
+			if (m_vPosGPUUpdate) {
+				// The vertex position update is done on the GPU
+				PDScalar one = 1.;
+				for (int d = 0; d < 3; d++) {
+					m_vPosGPUUpdate->mult(s.data() + (d * s.rows()), nullptr, one, false, d, m_numOuterVertices);
+				}
+			}
+			else
+#endif
+				if (!m_parallelVUpdate) {
+
+					// The vertex update is still done in parallel, but only for the three columns
+					PROJ_DYN_PARALLEL_FOR
+						for (int d = 0; d < 3; d++) {
+							m_positions.col(d) = m_baseFunctionsSparse * s.col(d);
+						}
+				}
+				else {
+
+					// The vertex update is done in finer granularity, by splitting the vertex
+					// positions into blocks of n rows and building the vector from this
+					int blockSize = m_baseFunctionsSparseBlocks[0].rows();
+					int numBlocks = std::ceil((float)m_positions.rows() / (float)blockSize);
+					PROJ_DYN_PARALLEL_FOR
+						for (int b = 0; b < numBlocks; b++) {
+							int curSize = blockSize;
+							if (b == numBlocks - 1) {
+								curSize = blockSize - (numBlocks * blockSize - m_positions.rows());
+							}
+							m_positions.block(b * blockSize, 0, curSize, 3) = m_baseFunctionsSparseBlocks[b] * s;
+						}
+				}
+		}
+		else {
+			PROJ_DYN_PARALLEL_FOR
+				for (int d = 0; d < 3; d++) {
+					m_positions.col(d) = m_baseFunctions * s.col(d);
+				}
+		}
+	
+}
+
+void ProjDynSimulator::snapBasesPos_verticesFullUpdate(PDPositions s) {
+
+	if (m_useSparseMatricesForSubspace) {
+#ifdef PROJ_DYN_USE_CUBLAS
+		if (m_vPosGPUUpdate) {
+			// The vertex position update is done on the GPU
+			std::cout << "NOT yet availablr for POD spaces" << std::endl;
+			return;
+		}
+		else
+#endif
+			if (!m_parallelVUpdate) {
+				// The vertex update is still done in parallel, but only for the three columns
+
+#pragma omp parallel
+#pragma omp single nowait
+				{
+#pragma omp task
+					m_positions.col(0) = m_basesFunctionsSparse[0] * s.col(0);
+#pragma omp task
+					m_positions.col(1) = m_basesFunctionsSparse[1] * s.col(1);
+#pragma omp task
+					m_positions.col(2) = m_basesFunctionsSparse[2] * s.col(2);
+				}
+
+			}
+			else {
+				// The vertex update is done in finer granularity, by splitting the vertex
+				// positions into blocks of n rows and building the vector from this
+				int blockSize = m_baseFunctionsSparseBlocks[0].rows();
+				int numBlocks = std::ceil((float)m_positions.rows() / (float)blockSize);
+				PROJ_DYN_PARALLEL_FOR
+					for (int b = 0; b < numBlocks; b++) {
+						int curSize = blockSize;
+						if (b == numBlocks - 1) {
+							curSize = blockSize - (numBlocks * blockSize - m_positions.rows());
+						}
+#pragma omp parallel
+#pragma omp single nowait
+						{
+#pragma omp task
+							m_positions.col(0).block(b * blockSize, 0, curSize, 3) = m_baseXFunctionsSparseBlocks[b] * s.col(0);
+#pragma omp task
+							m_positions.col(1).block(b * blockSize, 0, curSize, 3) = m_baseYFunctionsSparseBlocks[b] * s.col(1);
+#pragma omp task
+							m_positions.col(2).block(b * blockSize, 0, curSize, 3) = m_baseZFunctionsSparseBlocks[b] * s.col(2);
+						}
+					}
+			}
+	}
+	else { // case not m_useSparseMatricesForSubspace
+
+		updatePODPositionsSampling(m_positions, s, podUsedVerticesOnly);
+	}
+	
+}
 void ProjDynSimulator::projectUsedVerticesToSnapBasesSubspace() {
 
 	// Project full velocities back to subspace via interpolation of the velocities on used vertices
@@ -4144,7 +4546,7 @@ void ProjDynSimulator::step(int numIterations)
 
 	if (!m_isSetup) {
 		std::cout << "Constraints or external forces have changed since last setup call, therefore setup() will be called now!" << std::endl;
-		setup();
+		optimizedSetup();
 	}
 
 	PDPositions s;     // s = q(t) + h v(t) + h^2 M^(-1) f_{ext}
@@ -4576,7 +4978,7 @@ void ProjDynSimulator::step(int numIterations)
 					m_localStepOnlyProjectStopWatch.stopStopWatch();
 					m_localStepRestStopWatch.startStopWatch();
 
-					m_rhs.resize(m_numPosPODModes+1, 3);
+					m_rhs.setZero(m_numPosPODModes+1, 3);
 					
 					m_rhs.col(0) = UTSTMx * reducedAuxilaryX.col(0);
 					m_rhs.col(1) = UTSTMy * reducedAuxilaryY.col(1);
@@ -5096,11 +5498,14 @@ void ProjDynSimulator::step(int numIterations)
 
 	m_frameCount++;
 	std::cout << "Frame: " << m_frameCount << std::endl;
-
-	std::vector<unsigned int>* usedVerts = &m_allVerts;    // usedVerts is a pointer to a vector stores vertices indicies
+	
+	/* This doent seem to have a purpose!!
+		std::vector<unsigned int>* usedVerts = &m_allVerts;    // usedVerts is a pointer to a vector stores vertices indicies
 	if (m_rhsInterpolation) {
 		usedVerts = &m_constraintVertexSamples;        // OR usedVerts is a pointer to a vector stores constrianed vertices indicies
-	}
+	} 
+	*/
+
 
 	m_surroundingBlockStopWatch.stopStopWatch();
 	m_totalStopWatch.stopStopWatch();

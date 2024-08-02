@@ -239,7 +239,8 @@ public:
 		if (m_sim)
 		{
 			m_simTimer.startStopWatch();
-			m_sim->step(m_numIterations);
+			//m_sim->step(m_numIterations);
+			m_sim->optimizedStep(m_numIterations);
 			m_simTimer.stopStopWatch();
 			viewer->data().set_mesh(m_sim->getPositions().block(0, 0, m_numVertices, 3), m_faces);
 
@@ -379,7 +380,7 @@ int main()
 {
 	// Depending on whatever your default working directory is and wherever this mesh
 	// file is, you will need to change this URL
-	//std::string meshURL = "armadillo.obj";
+	//std::string mesh = "armadillo.obj";
 	std::string mesh = "bunny.obj";
 	std::string meshURL = "../../../data/" + mesh;
 	std::string meshName(PD::getMeshName(mesh));
@@ -423,7 +424,7 @@ int main()
 
 	if (igl::readOBJ(meshURL, verts2, faces2))
 	{
-		int maxAllowFaces = 5000;
+		int maxAllowFaces = 1000;
 		//igl::decimate(verts2, faces2, maxAllowFaces, verts2, faces2, J);
 		// here we convert to PD types:
 		PD::PDPositions verts = PD::PDPositions(verts2);
@@ -456,7 +457,7 @@ int main()
 		// LBS reduction parameters
 		// 
 		// 1. For position subspace
-		int numberSamplesForLBSVertexPosSubspace = 80;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
+		int numberSamplesForLBSVertexPosSubspace = 0;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
 		double radiusMultiplierForVertexPosSubspace = 1.1;      // The larger this number, the larger the support of the base functions.
 		
 		// 2. For constraints subspace
