@@ -3832,23 +3832,6 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 		fullPos_compute_s(s, blowupFac);
 	}
 	
-	//##################################################################
-	// Some additional initializations/updates
-	if (m_usingSkinSubspaces && m_constraintSamplesChanged && !m_usePosSnapBases) {
-		updateUsedVertices();
-
-		updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);     // update at used vertices only = true
-
-	}
-	if (!m_usingSkinSubspaces && m_constraintSamplesChanged && m_usePosSnapBases && m_rhsInterpolation) {
-
-		updateUsedVertices();
-
-
-		updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);     // update at used vertices only = true
-
-	}
-	/*
 	if (m_constraintSamplesChanged) {
 		if (m_rhsInterpolation || m_usingSkinSubspaces) {
 			updateUsedVertices();
@@ -3860,7 +3843,7 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 			updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);    // update at used vertices only = true
 		}
 	}
-	*/
+	
 	std::vector< ProjDynConstraint* >* usedConstraints;
 	if (m_rhsInterpolation ) {
 
@@ -4303,43 +4286,7 @@ void ProjDynSimulator::fullPos_compute_s(PDPositions& s, PDScalar blowupFac) {
 
 void ProjDynSimulator::lbsPos_compute_s(PDPositions& s, PDScalar blowupFac) {
 
-	if (m_collisionCorrection) {
 
-		if (m_rhsInterpolation) {
-			// Get actual velocities for used vertices
-			updatePositionsSampling(m_velocitiesUsedVs, m_velocitiesSubspace, true);
-			// Handel collision
-			handelTangentialMovementAndRepilsion_usedVertices();
-			// Get m_velocitiesSubspace from used vertices
-			projectUsedVerticesToLBSSubspace();
-		}
-		else {    // not rhsInterpolation
-			// Remove tangential movement and add repulsion movement from collided vertices
-			PROJ_DYN_PARALLEL_FOR
-				for (int v = 0; v < m_numVertices; v++) {
-					if (m_positionCorrections.row(v).norm() > 1e-12) {
-						PDVector tangentialV = m_velocities.row(v) - m_velocities.row(v).dot(m_positionCorrections.row(v)) * m_positionCorrections.row(v);
-						tangentialV *= (1. - m_frictionCoeff);
-						tangentialV += m_positionCorrections.row(v) * m_repulsionCoeff;
-						m_velocities.row(v) = tangentialV;
-					}
-				}
-
-			projectToSubspace(m_velocitiesSubspace, m_velocities, false);
-
-		}
-		//std::cout << "handled collision" << std::endl;
-	}
-
-	get_reduced_s(s, blowupFac);
-	// s is also the initial guess for the updated sub/positions
-
-	// Compute vertex positions on vertices involved in the computation of sampled constraints
-	updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
-	// Correct vertex positions of gripped and collided vertices
-	handleGripAndCollisionsUsedVs(s, true);
-
-	/*
 	// If there has been a collision in the last step, handle repulsion and friction:
 	if (m_collisionCorrection) {
 
@@ -4361,14 +4308,12 @@ void ProjDynSimulator::lbsPos_compute_s(PDPositions& s, PDScalar blowupFac) {
 
 	// compute s in the reduced subspace
 	get_reduced_s(s, blowupFac);
-	// s is also the initial guess for the updated sub/positions
-	s = m_positionsSubspace;
 
 	// Compute vertex positions on vertices involved in the computation of sampled constraints
 	updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
 
 	// Correct vertex positions of gripped and collided vertices
-	handleGripAndCollisionsUsedVs(s, true);       // true means to update the vertices after handling collection */
+	handleGripAndCollisionsUsedVs(s, true);       // true means to update the vertices after handling collection 
 }
 
 void ProjDynSimulator::get_reduced_s(PDPositions& s, PDScalar blowupFac) {
