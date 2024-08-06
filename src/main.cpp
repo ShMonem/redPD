@@ -239,8 +239,8 @@ public:
 		if (m_sim)
 		{
 			m_simTimer.startStopWatch();
-			//m_sim->step(m_numIterations);
-			m_sim->optimizedStep(m_numIterations);
+			m_sim->step(m_numIterations);
+			//m_sim->optimizedStep(m_numIterations);
 			m_simTimer.stopStopWatch();
 			viewer->data().set_mesh(m_sim->getPositions().block(0, 0, m_numVertices, 3), m_faces);
 
@@ -388,18 +388,20 @@ int main()
 	// note: photoes are stored only if STORE_FRAMES_PNG is sat to true.
 
 	std::string m_png_frames_directory = "../../../results/";
-	if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-	{
-		m_png_frames_directory = m_png_frames_directory + meshName;
+	if (STORE_FRAMES_PNG) {
 		if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 		{
-			m_png_frames_directory = m_png_frames_directory  +"/_gravitationalFall/";
+			m_png_frames_directory = m_png_frames_directory + meshName;
 			if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 			{
-				m_png_frames_directory = m_png_frames_directory + "png/";
+				m_png_frames_directory = m_png_frames_directory + "/_gravitationalFall/";
 				if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 				{
-					std::cout << "Creating PNG directory !: " << m_png_frames_directory << std::endl;
+					m_png_frames_directory = m_png_frames_directory + "png/";
+					if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+					{
+						std::cout << "Creating PNG directory !: " << m_png_frames_directory << std::endl;
+					}
 				}
 			}
 		}
@@ -424,7 +426,7 @@ int main()
 
 	if (igl::readOBJ(meshURL, verts2, faces2))
 	{
-		int maxAllowFaces = 1000;
+		int maxAllowFaces = 4000;
 		//igl::decimate(verts2, faces2, maxAllowFaces, verts2, faces2, J);
 		// here we convert to PD types:
 		PD::PDPositions verts = PD::PDPositions(verts2);
@@ -461,9 +463,9 @@ int main()
 		double radiusMultiplierForVertexPosSubspace = 1.1;      // The larger this number, the larger the support of the base functions.
 		
 		// 2. For constraints subspace
-		int dimensionOfConstraintProjectionsSubspace = 0;       // 120; // The constraint projections subspace will be constructed to be twice that size and then condensed via an SVD
+		int dimensionOfConstraintProjectionsSubspace = 120;       // 120; // The constraint projections subspace will be constructed to be twice that size and then condensed via an SVD
 		double radiusMultiplierForConstraintProjectionsSubspace = 2.2;     
-		int numberSampledConstraints = 0;                      // 1000; // Number of constraints that will be evaluated each iteration
+		int numberSampledConstraints = 1000;                      // 1000; // Number of constraints that will be evaluated each iteration
 		                                                       //  this number needs to be zero in order to do no reduction for constraint projection
 		double massPerUnitArea = 2.;
 		double dampingAlpha = 0;
@@ -473,50 +475,51 @@ int main()
 
 
 		// The above parameters define name extension for the .png storage if desired
-		std::string simCase = "";          
-		if (numberPositionPCAModes > 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace == 0) {
-			simCase = simCase + "posPCA_" + std::to_string(numberPositionPCAModes);
-		}
-		else if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes > 0 && numberSamplesForLBSVertexPosSubspace == 0) {
-			simCase = simCase + "posSPLOCS_" + std::to_string(numberPositionSPLOCSModes);
-		}
-		else if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace > 0) {
-			simCase = simCase + "posLBS_" + std::to_string(numberSamplesForLBSVertexPosSubspace);
-		}
-		else if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace == 0) {
-			simCase = simCase + "noPosREduction_";
-		}
-		else {
-			std::cout << "Fatal ERORRR! simulation case unknows. Check position reduction parameters passed to SimVeiwer!" << std::endl;	
-		}
+		std::string simCase = "";   
+		if (STORE_FRAMES_PNG) {
+			if (numberPositionPCAModes > 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace == 0) {
+				simCase = simCase + "posPCA_" + std::to_string(numberPositionPCAModes);
+			}
+			else if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes > 0 && numberSamplesForLBSVertexPosSubspace == 0) {
+				simCase = simCase + "posSPLOCS_" + std::to_string(numberPositionSPLOCSModes);
+			}
+			else if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace > 0) {
+				simCase = simCase + "posLBS_" + std::to_string(numberSamplesForLBSVertexPosSubspace);
+			}
+			else if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace == 0) {
+				simCase = simCase + "noPosREduction_";
+			}
+			else {
+				std::cout << "Fatal ERORRR! simulation case unknows. Check position reduction parameters passed to SimVeiwer!" << std::endl;
+			}
 
-		if (numberSampledConstraints > 0 && dimensionOfConstraintProjectionsSubspace > 0  && numberNonlinearDEIMModes == 0)
-		{
-			simCase = simCase + "_constrLBS_" + std::to_string(dimensionOfConstraintProjectionsSubspace);
-		}
-		else if (dimensionOfConstraintProjectionsSubspace == 0 && numberNonlinearDEIMModes > 0)
-		{
-			simCase = simCase + "_constrDEIM_" + std::to_string(numberNonlinearDEIMModes);
-		}
-		else {
-			simCase = simCase + "_noConstrReduction";
-		}
+			if (numberSampledConstraints > 0 && dimensionOfConstraintProjectionsSubspace > 0 && numberNonlinearDEIMModes == 0)
+			{
+				simCase = simCase + "_constrLBS_" + std::to_string(dimensionOfConstraintProjectionsSubspace);
+			}
+			else if (dimensionOfConstraintProjectionsSubspace == 0 && numberNonlinearDEIMModes > 0)
+			{
+				simCase = simCase + "_constrDEIM_" + std::to_string(numberNonlinearDEIMModes);
+			}
+			else {
+				simCase = simCase + "_noConstrReduction";
+			}
 
-		if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace == 0 \
-			&& dimensionOfConstraintProjectionsSubspace == 0 && numberNonlinearDEIMModes == 0)
-		{
-			simCase = "FOM";
-		}
-		else {
-			simCase = simCase + "/";
-		}
+			if (numberPositionPCAModes == 0 && numberPositionSPLOCSModes == 0 && numberSamplesForLBSVertexPosSubspace == 0 \
+				&& dimensionOfConstraintProjectionsSubspace == 0 && numberNonlinearDEIMModes == 0)
+			{
+				simCase = "FOM";
+			}
+			else {
+				simCase = simCase + "/";
+			}
 
-		m_png_frames_directory = m_png_frames_directory + simCase;
-		if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-		{
-			std::cout << "PNG directory created!: " << m_png_frames_directory << std::endl;
+			m_png_frames_directory = m_png_frames_directory + simCase;
+			if (CreateDirectory(m_png_frames_directory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+			{
+				std::cout << "PNG directory created!: " << m_png_frames_directory << std::endl;
+			}
 		}
-
 
 		// Start a viewer that uses a simple plugin to draw the simulated mesh
 		// (it does numIterations local/global steps to simulate the next timestep

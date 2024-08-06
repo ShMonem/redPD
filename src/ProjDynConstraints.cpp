@@ -530,6 +530,7 @@ namespace PD {
 			m_selectionMatrix.insert(coord3d, tets(tInd, 2)) = m_restEdgesInv(1, coord3d);
 			m_selectionMatrix.insert(coord3d, tets(tInd, 3)) = m_restEdgesInv(2, coord3d);
 		}
+		//m_selectionMatrixTransposed.resize(numVertices, 3);
 		m_selectionMatrixTransposed = m_selectionMatrix.transpose();
 
 		postInit();

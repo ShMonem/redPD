@@ -291,18 +291,20 @@ ProjDynSimulator::ProjDynSimulator
 	// create directories to store position snapshots
 	// note snapshots are stored only if STORE_FRAMES_OFF is sat true
 	m_meshSnapshotsDirectory = "../../../results/";
-	if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-	{
-		m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + m_meshName + "/";
+	if (STORE_FRAMES_OFF) {
 		if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 		{
-			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory +  "_gravitationalFall/"; 
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + m_meshName + "/";
 			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 			{
-				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "position_snapshots/";
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "_gravitationalFall/";
 				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 				{
-					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+					m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "position_snapshots/";
+					if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+					{
+						std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+					}
 				}
 			}
 		}
@@ -1351,6 +1353,7 @@ void PD::ProjDynSimulator::addTetStrain(PDScalar weight, PDScalar rangeMin, PDSc
 
 	if (m_hasTetrahedrons) {  // add tetcConstrainttProj at each tet
 		for (int t = 0; t < m_numTets; t++) {
+			
 			PDScalar avgX = 1; // (m_positions(m_tetrahedrons(t, 0), 0) + m_positions(m_tetrahedrons(t, 1), 0) + m_positions(m_tetrahedrons(t, 2), 0) + m_positions(m_tetrahedrons(t, 3), 0)) / 4.;
 			TetStrainConstraint* sc = new TetStrainConstraint(m_numVertices, t, m_tetrahedrons, m_positions, rangeMin, rangeMax, (weight * m_normalization) / (avgX < 0 ? 10. : 1.));
 			addConstraint(sc);
@@ -1863,13 +1866,14 @@ void ProjDynSimulator::optimizedSetup() {
 	else { 
 		// No reduction for constraints´ projections space:
 		// In this case, no pre-computations are required, we only extend the snapshots dir name
-		m_meshSnapshotsDirectory = m_meshSnapshotsDirectory +"noConstraintProjReduction/";
-		if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-		{
-			std::cout << "Snapshots directory ready!: " << m_meshSnapshotsDirectory << std::endl;
+		if (STORE_FRAMES_OFF) {
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "noConstraintProjReduction/";
+			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+			{
+				std::cout << "Snapshots directory ready!: " << m_meshSnapshotsDirectory << std::endl;
+			}
 		}
 		std::cout << "Pre-computation case: Full simulations for constraint projection" << std::endl;
-	
 	}
 
 	// Now, all sampled constraints should have been added and the used vertices can be updated,
@@ -2503,11 +2507,13 @@ void ProjDynSimulator::setup() {
 			
 		if (m_usingSkinSubspaces && !m_usePosSnapBases) {    /// Here we have Skinning positionSubspace reduction and rhdInterpolation
 			m_subspaceLHS_inner.setZero(m_baseFunctions.cols(), m_baseFunctions.cols());
-			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_pos_and_constraint/";
-
-			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-			{
-				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+			
+			if (STORE_FRAMES_OFF) {
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_pos_and_constraint/";
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
 			}
 
 			std::cout << "Simulation case: Skinning subspaces for positions and LS Fitting for constraint projection" << std::endl;
@@ -2547,10 +2553,13 @@ void ProjDynSimulator::setup() {
 			m_projectedLHS_inner[1].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
 			m_projectedLHS_inner[2].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
 			
-			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_LBS_constraint/";
-			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-			{
-				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+			
+			if (STORE_FRAMES_OFF) {
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_LBS_constraint/";
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
 			}
 			std::cout << "Simulation case: POD subspaces for positions and LS Fitting for constraint projection" << std::endl;
 			
@@ -2623,10 +2632,12 @@ void ProjDynSimulator::setup() {
 		}
 		else if (!m_usingPosSubspaces){  // m_rhsInterpolation but no position space reduction
 
-			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_constraint/";
-			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-			{
-				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+			if (STORE_FRAMES_OFF) {
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_constraint/";
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
 			}
 			std::cout << "Simulation case: No subspace reducgion for positions and LS Fitting for constraint projection" << std::endl;
 			
@@ -2697,10 +2708,12 @@ void ProjDynSimulator::setup() {
 		
 		if (m_usingSkinSubspaces&& !m_usePosSnapBases) { // Slow case: using position subspaces but no rhs interpolation
 			
-			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_pos/";
-			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-			{
-				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+			if (STORE_FRAMES_OFF) {
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_pos/";
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
 			}
 			std::cout << "Simulation case: Skinning subspace for positions and no reduction for constraint projection. VERY SLOW " << std::endl;
 			// (numeriacally unstable) REQUIRES EXTREMELY SMALL TIME STEP for reasonable visual simulations and becomes even SLOWWWWWWER!!" 
@@ -2717,27 +2730,28 @@ void ProjDynSimulator::setup() {
 		}		
 		else if (m_usePosSnapBases && !m_usingSkinSubspaces) { // Slow case: using position subspaces but no rhs interpolation
 			
-			if(m_usingQDEIMComponents){
-				if(m_solveDeimLS){
-					m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_LSDEIM_constraint/";
-					
-					std::cout << "Simulation case: POD subspace for positions and DEIM/QDEIM for constraint projection, using Least square" << std::endl;
-				}
-				else{
-					m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_DEIM_constraint/";
-					std::cout << "Simulation case: POD subspace for positions and DEIM/QDEIM for constraint projection" << std::endl;
-				}
-			}
-			else
-			{
-				std::cout << "Simulation case: POD subspace for positions and no reduction for constraint projection" << std::endl;
-				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_only_pos/";
-			}
-			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-			{
-				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
-			}
+			if (STORE_FRAMES_OFF) {
+				if (m_usingQDEIMComponents) {
+					if (m_solveDeimLS) {
+						m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_LSDEIM_constraint/";
 
+						std::cout << "Simulation case: POD subspace for positions and DEIM/QDEIM for constraint projection, using Least square" << std::endl;
+					}
+					else {
+						m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_DEIM_constraint/";
+						std::cout << "Simulation case: POD subspace for positions and DEIM/QDEIM for constraint projection" << std::endl;
+					}
+				}
+				else
+				{
+					std::cout << "Simulation case: POD subspace for positions and no reduction for constraint projection" << std::endl;
+					m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_only_pos/";
+				}
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
+			}
 			m_projectedLHS_inner[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
 			m_projectedLHS_inner[1].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
 			m_projectedLHS_inner[2].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
@@ -2806,10 +2820,12 @@ void ProjDynSimulator::setup() {
 			}	
 		}
 		else { // Full simulation: here neither position space nor constraint projection reduction ===> no reduction at all!!
-			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "FOM/";
-			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-			{
-				std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+			if (STORE_FRAMES_OFF) {
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "FOM/";
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
 			}
 			std::cout << "Simulation case: No REDUCTION: we run FullSpace positions and FullSpace constraint projection" << std::endl;
 
@@ -3628,12 +3644,14 @@ void ProjDynSimulator::lbsConstarintsSetup() {
 	// TODO: assert no other methods to reduce constriants projectons
 	assert(!m_usingQDEIMComponents);
 
-	m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "ConsProjLBS/";
 	std::cout << "Pre-computation case: LBS for constraint projection" << std::endl;
 
-	if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-	{
-		std::cout << "Snapshots directory ready!: " << m_meshSnapshotsDirectory << std::endl;
+	if (STORE_FRAMES_OFF) {
+		m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "ConsProjLBS/";
+		if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+		{
+			std::cout << "Snapshots directory ready!: " << m_meshSnapshotsDirectory << std::endl;
+		}
 	}
 	
 	std::vector< ProjDynConstraint* >* usedConstraints = &m_constraints;
@@ -3805,9 +3823,11 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 	// Initiate position q = s 
 	if (m_usePosSnapBases) {
 		snapBases_compute_s(s, blowupFac);
+		s = m_positionsSubspace;
 	}
 	else if (m_usingSkinSubspaces) {
 		lbsPos_compute_s(s, blowupFac);
+		s = m_positionsSubspace;
 	}
 	else {
 		// No position spave reduction
@@ -3815,6 +3835,8 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 		fullPos_compute_s(s, blowupFac);
 		s = m_positions;
 	}
+	
+
 	if (m_constraintSamplesChanged) {
 		if (m_rhsInterpolation || m_usingSkinSubspaces) {
 			updateUsedVertices();
@@ -3910,12 +3932,12 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 					currentAuxilaries[ind] = c->getP(m_positions, didCollide);
 					if (didCollide >= 0) m_collidedVerts[didCollide] = true;
 				}
-				m_RHS.setZero(m_positions.rows(), 3);
+				m_STp.setZero(m_positions.rows(), 3);
 				PROJ_DYN_PARALLEL_FOR
 					for (int d = 0; d < 3; d++) {
 						for (int mind = 0; mind < numConstraints; mind++) {
 							PDScalar curWeight = usedConstraints->at(mind)->getWeight();
-							fastDensePlusSparseTimesDenseCol(m_RHS, usedConstraints->at(mind)->getSelectionMatrixTransposed(), currentAuxilaries[mind], d, curWeight);
+							fastDensePlusSparseTimesDenseCol(m_STp, usedConstraints->at(mind)->getSelectionMatrixTransposed(), currentAuxilaries[mind], d, curWeight);
 						}
 					}
 				// here constrProjTerm = lambda S.T p
@@ -4040,7 +4062,7 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 							m_RHS.col(d) = m_rhsFirstTermMatrixSparse * s.col(d) + m_UTSTVp.col(d);   // rhs2 = (U^T M s)/h^2 +  U.T lambda S.T V p
 						}
 						else {
-							m_RHS.col(d) += m_rhsFirstTermMatrix * s.col(d) + m_UTSTVp.col(d);
+							m_RHS.col(d) = m_rhsFirstTermMatrix * s.col(d) + m_UTSTVp.col(d);
 						}
 					}
 			}
@@ -4052,20 +4074,20 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 				// First, project constraints projections to position subspace
 				// here m_rhs = lambda S.T p
 				if (m_useSparseMatricesForSubspace) {
-					m_UTSTp = m_baseFunctionsTransposedSparse * m_STp;  // rhs2 = U.T lambda S.T p 
+					m_RHS = m_baseFunctionsTransposedSparse * m_STp;  // rhs2 = U.T lambda S.T p 
 				}
 				else {
-					m_UTSTp = m_baseFunctionsTransposed * m_STp;
+					m_RHS = m_baseFunctionsTransposed * m_STp;
 				}
 
 				// Now add the term from the conservation of momentum
 				PROJ_DYN_PARALLEL_FOR
 					for (int d = 0; d < 3; d++) {
 						if (m_useSparseMatricesForSubspace) {
-							m_RHS.col(d) = m_rhsFirstTermMatrixSparse * s.col(d) + m_UTSTp.col(d);   // rhs2 = (U^T M s)/h^2 +  U.T lambda S.T p
+							m_RHS.col(d) += m_rhsFirstTermMatrixSparse * s.col(d);   // rhs2 = (U^T M s)/h^2 +  U.T lambda S.T p
 						}
 						else {
-							m_RHS.col(d) = m_rhsFirstTermMatrix * s.col(d) + m_UTSTp.col(d);
+							m_RHS.col(d) += m_rhsFirstTermMatrix * s.col(d);
 						}
 					}
 			}
@@ -4074,7 +4096,7 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 		// if not reducing position space
 			// If no subspaces are used, the full rhs from the constraints just needs to be added
 			// to the conservation of momentum terms so that m_rhs = (M/h^2 ) s + lambda S.T p
-			//m_RHS.setZero(m_positions.rows(), 3);
+			m_RHS.setZero(m_positions.rows(), 3);
 			if (m_rhsInterpolation) {
 				PROJ_DYN_PARALLEL_FOR
 					for (int v = 0; v < m_numVertices; v++) {
@@ -4087,7 +4109,7 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 				PROJ_DYN_PARALLEL_FOR
 					for (int v = 0; v < m_numVertices; v++) {
 						for (int d = 0; d < 3; d++) {
-							m_RHS(v, d) += m_rhsMasses(v) * s(v, d);   // here m_rhs = lambda S.T p + (M/h^2) s
+							m_RHS(v, d) = m_STp(v, d) + m_rhsMasses(v) * s(v, d);   // here m_rhs = lambda S.T p + (M/h^2) s
 						}
 					}
 			}
@@ -4138,6 +4160,7 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 			}
 		}
 		else if (m_usingSkinSubspaces) {
+			//std::cout << m_RHS.row(0);
 			PROJ_DYN_PARALLEL_FOR
 				for (int d = 0; d < 3; d++) {
 					if (m_useSparseMatricesForSubspace) {
@@ -4160,16 +4183,16 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 		// update positions at used samples
 		m_updatingVPosStopWatch.startStopWatch();
 		if (m_usingPosSubspaces && !(i == numIterations - 1)) {
-			if (m_usingSkinSubspaces && m_rhsInterpolation) {
+			if (m_usingSkinSubspaces && m_rhsInterpolation && !m_usePosSnapBases) {
 				updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);  // update for used vertcies only
 			}
 			else if (m_usePosSnapBases) {
-				//if (!m_rhsInterpolation) updatePODPositionsSampling(m_positions, m_positionsSubspace, podUsedVerticesOnly);       // no local supprt
-				if (m_rhsInterpolation) updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, podUsedVerticesOnly);
+				if (!m_rhsInterpolation) updatePODPositionsSampling(m_positions, m_positionsSubspace, podUsedVerticesOnly);       // no local supprt
+				else if (m_rhsInterpolation) updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, podUsedVerticesOnly);
 			}
-			//else {   // TODO ??
-			//	updatePositionsSampling(m_positions, m_positionsSubspace, false);       // update for all vertices
-			//} 
+			else {
+				updatePositionsSampling(m_positions, m_positionsSubspace, false);       // update for all vertices
+			}
 		}  /// how this update is done for full simulations?
 		m_updatingVPosStopWatch.stopStopWatch();
 
@@ -4178,24 +4201,25 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 	// updating samples // TODO: check necesety
 	// handel grip // check effecint
 	if (m_rhsInterpolation && m_collisionFreeDraw) {
-		if (m_usingSkinSubspaces) {
+		if(m_usingSkinSubspaces){
 			updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
 			handleGripAndCollisionsUsedVs(s, false);
 		}
-
+		
 	}
 	else if (m_rhsInterpolation) {
-		if (m_usingSkinSubspaces) s = m_positionsSubspace;
-		if (m_usePosSnapBases) {
-			s = m_positionsSubspace;
-			updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, podUsedVerticesOnly);
+		if(m_usingSkinSubspaces) s = m_positionsSubspace;
+		if(m_usePosSnapBases){
+			 s = m_positionsSubspace;
+			 updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, podUsedVerticesOnly);
 		}
 		handleGripAndCollisionsUsedVs(s, false);
 	}
-	else if (!m_rhsInterpolation && m_usingSkinSubspaces) {
+	else if (!m_rhsInterpolation && m_usingSkinSubspaces){
 		updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
 		handleGripAndCollisionsUsedVs(s, false);
 	}
+
 	/****************************************************/
 
 	/***********************************/
@@ -4294,9 +4318,8 @@ void ProjDynSimulator::lbsPos_compute_s(PDPositions s, PDScalar blowupFac) {
 
 	// compute s in the reduced subspace
 	get_reduced_s(s, blowupFac);
-
 	// s is also the initial guess for the updated sub/positions
-	m_positionsSubspace = s;
+	s = m_positionsSubspace;
 
 	// Compute vertex positions on vertices involved in the computation of sampled constraints
 	updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
@@ -4311,6 +4334,8 @@ void ProjDynSimulator::get_reduced_s(PDPositions s, PDScalar blowupFac) {
 	if (m_rayleighDampingAlpha > 0) {
 		s = s - m_timeStep * m_rayleighDampingAlpha * m_velocitiesSubspace;
 	}
+	// s is also the initial guess for the updated sub/positions
+	m_positionsSubspace = s;
 }
 
 void ProjDynSimulator::snapBases_compute_s(PDPositions s, PDScalar blowupFac) {
@@ -4361,7 +4386,7 @@ void ProjDynSimulator::snapBases_compute_s(PDPositions s, PDScalar blowupFac) {
 }
 
 void ProjDynSimulator::lbsPos_verticesFullUpdate(PDPositions s) {
-
+	
 		if (m_useSparseMatricesForSubspace) {
 #ifdef PROJ_DYN_USE_CUBLAS
 			if (m_vPosGPUUpdate) {
@@ -4403,6 +4428,7 @@ void ProjDynSimulator::lbsPos_verticesFullUpdate(PDPositions s) {
 					m_positions.col(d) = m_baseFunctions * s.col(d);
 				}
 		}
+		//std::cout << s.row(0) << m_positions.row(0) << "  end" <<std::endl;
 	
 }
 
@@ -5068,6 +5094,7 @@ void ProjDynSimulator::step(int numIterations)
 			// (which is already the case when using rhs interpolation)
 			if (!m_rhsInterpolation) {
 				if (m_useSparseMatricesForSubspace) {
+					
 					rhs2 = m_baseFunctionsTransposedSparse * m_rhs;  // here m_rhs = lambda S.T p ---> rhs2 = U.T lambda S.T p 
 				}
 				else {
@@ -5237,8 +5264,10 @@ void ProjDynSimulator::step(int numIterations)
 				// Only subsspace positions are updated, the full positions are only evaluated
 				// where the constraints need them.
 				int d = 0;
+				
 				PROJ_DYN_PARALLEL_FOR
 				for (d = 0; d < 3; d++) {
+					
 					if (m_useSparseMatricesForSubspace) {
 						m_positionsSubspace.col(d) = m_subspaceSystemSolverSparse.solve(rhs2.col(d));
 						
@@ -5382,6 +5411,7 @@ void ProjDynSimulator::step(int numIterations)
 	
 	
 	if (m_usingSkinSubspaces && !m_usePosSnapBases) {
+		//std::cout << s.row(0) << m_positions.row(0) << std::endl;
 		if (m_useSparseMatricesForSubspace) {
 #ifdef PROJ_DYN_USE_CUBLAS
 			if (m_vPosGPUUpdate) {
@@ -5423,6 +5453,7 @@ void ProjDynSimulator::step(int numIterations)
 					m_positions.col(d) = m_baseFunctions * s.col(d);
 				}
 		}
+		std::cout << s.row(0) << m_positions.row(0) << "  end" << std::endl;
 	}
 	
 	if (m_usePosSnapBases && !m_usingSkinSubspaces) {
@@ -5661,7 +5692,6 @@ void PD::ProjDynSimulator::setEnforceCollisionFreeDraw(bool enable)
 */
 void PD::ProjDynSimulator::setStiffnessFactor(PDScalar w)
 {
-	//std::cout << "===PD::CollisionObject::setStiffnessFactor===" << std::endl;
 	for (auto& g : m_snapshotGroups) {
 		g.setWeightFactor(w);
 	}
