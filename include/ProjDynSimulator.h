@@ -157,17 +157,17 @@ namespace PD {
 		void lbsConstarintsSetup();
 
 		void optimizedStep(int numIterations);
-		void fullPos_compute_s(PDPositions s, PDScalar blowupFac);
-		void lbsPos_compute_s(PDPositions s, PDScalar blowupFac);
+		void fullPos_compute_s(PDPositions& s, PDScalar blowupFac);
+		void lbsPos_compute_s(PDPositions& s, PDScalar blowupFac);
 		void handelTangentialMovementAndRepilsion_usedVertices();
 		void projectUsedVerticesToLBSSubspace();
 		void handelTangentialMovementAndRepilsion_allVertices();
-		void get_reduced_s(PDPositions s, PDScalar blowupFac);
-		void snapBases_compute_s(PDPositions s, PDScalar blowupFac);
+		void get_reduced_s(PDPositions& s, PDScalar blowupFac);
+		void snapBases_compute_s(PDPositions& s, PDScalar blowupFac);
 		void projectUsedVerticesToSnapBasesSubspace();
 
-		void lbsPos_verticesFullUpdate(PDPositions s);
-		void snapBasesPos_verticesFullUpdate(PDPositions s);
+		void lbsPos_verticesFullUpdate(PDPositions& s);
+		void snapBasesPos_verticesFullUpdate(PDPositions& s);
 		StopWatch m_rhsAssemblyStopWatch;
 
 		PDPositions m_RHS;

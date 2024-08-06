@@ -239,8 +239,8 @@ public:
 		if (m_sim)
 		{
 			m_simTimer.startStopWatch();
-			m_sim->step(m_numIterations);
-			//m_sim->optimizedStep(m_numIterations);
+			//m_sim->step(m_numIterations);
+			m_sim->optimizedStep(m_numIterations);
 			m_simTimer.stopStopWatch();
 			viewer->data().set_mesh(m_sim->getPositions().block(0, 0, m_numVertices, 3), m_faces);
 

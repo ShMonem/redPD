@@ -3153,7 +3153,7 @@ void ProjDynSimulator::lbsPosSetup() {
 	assert(m_usingSkinSubspaces);
 	assert(!m_usingPODPosSubspaces && !m_usingSPLOCSPosSubspaces);
 	m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "posLBS_";
-	std::cout << "Pre-computations: Skinning subspaces for positions ..." << std::endl;
+	std::cout << "Pre-computations: LBS subspaces for positions ..." << std::endl;
 
 	std::cout << "Creating subspaces..." << std::endl;
 	/* Create position subspace basis functions */
@@ -3208,7 +3208,7 @@ void ProjDynSimulator::lbsPosSetup() {
 	m_rhsFirstTermMatrixPre = m_baseFunctionsTransposed * m_massMatrix * m_baseFunctions;
 	m_rhsFirstTermMatrix = m_rhsFirstTermMatrixPre * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)
 	rhs2.setZero(m_baseFunctions.cols(), 3);
-
+	m_RHS.setZero(m_baseFunctions.cols(), 3);
 	std::cout << "Projecting the momentum term LHS to skinning subspaces, for the global system ..." << std::endl;
 	// Momentum term
 	m_subspaceLHS_mom = m_baseFunctionsTransposed * m_lhsMatrix * m_baseFunctions;       
@@ -3823,20 +3823,32 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 	// Initiate position q = s 
 	if (m_usePosSnapBases) {
 		snapBases_compute_s(s, blowupFac);
-		s = m_positionsSubspace;
 	}
 	else if (m_usingSkinSubspaces) {
 		lbsPos_compute_s(s, blowupFac);
-		s = m_positionsSubspace;
 	}
 	else {
 		// No position spave reduction
-		s.setZero(m_positions.rows(), 3);
 		fullPos_compute_s(s, blowupFac);
-		s = m_positions;
 	}
 	
+	//##################################################################
+	// Some additional initializations/updates
+	if (m_usingSkinSubspaces && m_constraintSamplesChanged && !m_usePosSnapBases) {
+		updateUsedVertices();
 
+		updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);     // update at used vertices only = true
+
+	}
+	if (!m_usingSkinSubspaces && m_constraintSamplesChanged && m_usePosSnapBases && m_rhsInterpolation) {
+
+		updateUsedVertices();
+
+
+		updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);     // update at used vertices only = true
+
+	}
+	/*
 	if (m_constraintSamplesChanged) {
 		if (m_rhsInterpolation || m_usingSkinSubspaces) {
 			updateUsedVertices();
@@ -3848,7 +3860,7 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 			updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);    // update at used vertices only = true
 		}
 	}
-	
+	*/
 	std::vector< ProjDynConstraint* >* usedConstraints;
 	if (m_rhsInterpolation ) {
 
@@ -3870,7 +3882,7 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 	/****************************************************/
 	/* ------------ Main solver iterations ------------ */
 	
-	m_STVp.setZero(m_positions.rows(), 3);
+	
 	
 
 	for (int i = 0; i < numIterations; i++) {
@@ -3892,7 +3904,8 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 				addAdditionalConstraints(m_positionsUsedVs, m_UTSTVp, m_collidedVerts);
 				//constrProjTerm = lambda U.T S.T V p
 			}
-			else if (m_usePosSnapBases) {				
+			else if (m_usePosSnapBases) {	
+				m_STVp.setZero(m_positions.rows(), 3);
 				for (auto& g : m_snapshotGroups) {
 					g.approximateRHS(m_positionsUsedVs, m_STVp, m_collidedVerts);
 				}
@@ -3900,6 +3913,7 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 				//  constrProjTerm = lambda S.T V p (computed for the samples only)
 			}
 			else {   
+				m_STVp.setZero(m_positions.rows(), 3);
 				for (auto& g : m_snapshotGroups)
 					g.approximateRHS(m_positions, m_STVp, m_collidedVerts);
 				addAdditionalConstraints(m_positions, m_STVp, m_collidedVerts);
@@ -3918,21 +3932,20 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 		}
 		else {
 			// Compute full local constaints projections
-
+			m_STp.setZero(m_positions.rows(), 3);
 			if (recordingPSnapshots) {
 				// TODO
 			}
-			else {
-				
+			else {	
 				m_localStepOnlyProjectStopWatch.startStopWatch();
-#				pragma omp parallel for num_threads(PROJ_DYN_NUM_THREADS)
+#pragma omp parallel for num_threads(PROJ_DYN_NUM_THREADS)
 				for (int ind = 0; ind < numConstraints; ind++) {
 					ProjDynConstraint* c = usedConstraints->at(ind);
 					int didCollide = -1;
 					currentAuxilaries[ind] = c->getP(m_positions, didCollide);
 					if (didCollide >= 0) m_collidedVerts[didCollide] = true;
 				}
-				m_STp.setZero(m_positions.rows(), 3);
+				
 				PROJ_DYN_PARALLEL_FOR
 					for (int d = 0; d < 3; d++) {
 						for (int mind = 0; mind < numConstraints; mind++) {
@@ -4050,7 +4063,7 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 	
 		}
 		else if (m_usingSkinSubspaces){
-			m_RHS.setZero(m_baseFunctionsTransposed.rows(), 3);
+		
 			if (m_rhsInterpolation) {
 				
 				// constraints projections are already projected to position subspace
@@ -4071,23 +4084,14 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 				std::cout << "At the time of this implementation, we had no intention to combine LBS with DEIM method!!" << std::endl;
 			}
 			else {  
-				// First, project constraints projections to position subspace
-				// here m_rhs = lambda S.T p
-				if (m_useSparseMatricesForSubspace) {
-					m_RHS = m_baseFunctionsTransposedSparse * m_STp;  // rhs2 = U.T lambda S.T p 
-				}
-				else {
-					m_RHS = m_baseFunctionsTransposed * m_STp;
-				}
-
 				// Now add the term from the conservation of momentum
 				PROJ_DYN_PARALLEL_FOR
 					for (int d = 0; d < 3; d++) {
 						if (m_useSparseMatricesForSubspace) {
-							m_RHS.col(d) += m_rhsFirstTermMatrixSparse * s.col(d);   // rhs2 = (U^T M s)/h^2 +  U.T lambda S.T p
+							m_RHS.col(d) = m_rhsFirstTermMatrixSparse * s.col(d) + m_baseFunctionsTransposedSparse* m_STp.col(d);   // rhs2 = (U^T M s)/h^2 +  U.T lambda S.T p
 						}
 						else {
-							m_RHS.col(d) += m_rhsFirstTermMatrix * s.col(d);
+							m_RHS.col(d) = m_rhsFirstTermMatrix * s.col(d) + m_baseFunctionsTransposed * m_STp.col(d);
 						}
 					}
 			}
@@ -4160,7 +4164,6 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 			}
 		}
 		else if (m_usingSkinSubspaces) {
-			//std::cout << m_RHS.row(0);
 			PROJ_DYN_PARALLEL_FOR
 				for (int d = 0; d < 3; d++) {
 					if (m_useSparseMatricesForSubspace) {
@@ -4201,23 +4204,26 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 	// updating samples // TODO: check necesety
 	// handel grip // check effecint
 	if (m_rhsInterpolation && m_collisionFreeDraw) {
-		if(m_usingSkinSubspaces){
+		if (m_usingSkinSubspaces) {
 			updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
 			handleGripAndCollisionsUsedVs(s, false);
 		}
-		
+
 	}
 	else if (m_rhsInterpolation) {
-		if(m_usingSkinSubspaces) s = m_positionsSubspace;
-		if(m_usePosSnapBases){
-			 s = m_positionsSubspace;
-			 updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, podUsedVerticesOnly);
+		if (m_usingSkinSubspaces) s = m_positionsSubspace;
+		if (m_usePosSnapBases) {
+			s = m_positionsSubspace;
+			updatePODPositionsSampling(m_positionsUsedVs, m_positionsSubspace, podUsedVerticesOnly);
 		}
 		handleGripAndCollisionsUsedVs(s, false);
 	}
-	else if (!m_rhsInterpolation && m_usingSkinSubspaces){
+	else if (!m_rhsInterpolation && m_usingSkinSubspaces) {
+		
 		updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
 		handleGripAndCollisionsUsedVs(s, false);
+		s = m_positionsSubspace;
+
 	}
 
 	/****************************************************/
@@ -4270,7 +4276,7 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 	}
 }
 
-void ProjDynSimulator::fullPos_compute_s(PDPositions s, PDScalar blowupFac) {
+void ProjDynSimulator::fullPos_compute_s(PDPositions& s, PDScalar blowupFac) {
 
 	// Compute s:  //note: s = q(t) + h v(t) + h^2 M^(-1) f_{ext}, and here q and v are in the full space
 	s = m_positions + m_timeStep * m_velocities + m_fExtWeighted + blowupFac * m_fGravWeighted;
@@ -4295,8 +4301,45 @@ void ProjDynSimulator::fullPos_compute_s(PDPositions s, PDScalar blowupFac) {
 	m_positions = s;
 }
 
-void ProjDynSimulator::lbsPos_compute_s(PDPositions s, PDScalar blowupFac) {
+void ProjDynSimulator::lbsPos_compute_s(PDPositions& s, PDScalar blowupFac) {
 
+	if (m_collisionCorrection) {
+
+		if (m_rhsInterpolation) {
+			// Get actual velocities for used vertices
+			updatePositionsSampling(m_velocitiesUsedVs, m_velocitiesSubspace, true);
+			// Handel collision
+			handelTangentialMovementAndRepilsion_usedVertices();
+			// Get m_velocitiesSubspace from used vertices
+			projectUsedVerticesToLBSSubspace();
+		}
+		else {    // not rhsInterpolation
+			// Remove tangential movement and add repulsion movement from collided vertices
+			PROJ_DYN_PARALLEL_FOR
+				for (int v = 0; v < m_numVertices; v++) {
+					if (m_positionCorrections.row(v).norm() > 1e-12) {
+						PDVector tangentialV = m_velocities.row(v) - m_velocities.row(v).dot(m_positionCorrections.row(v)) * m_positionCorrections.row(v);
+						tangentialV *= (1. - m_frictionCoeff);
+						tangentialV += m_positionCorrections.row(v) * m_repulsionCoeff;
+						m_velocities.row(v) = tangentialV;
+					}
+				}
+
+			projectToSubspace(m_velocitiesSubspace, m_velocities, false);
+
+		}
+		//std::cout << "handled collision" << std::endl;
+	}
+
+	get_reduced_s(s, blowupFac);
+	// s is also the initial guess for the updated sub/positions
+
+	// Compute vertex positions on vertices involved in the computation of sampled constraints
+	updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
+	// Correct vertex positions of gripped and collided vertices
+	handleGripAndCollisionsUsedVs(s, true);
+
+	/*
 	// If there has been a collision in the last step, handle repulsion and friction:
 	if (m_collisionCorrection) {
 
@@ -4325,10 +4368,10 @@ void ProjDynSimulator::lbsPos_compute_s(PDPositions s, PDScalar blowupFac) {
 	updatePositionsSampling(m_positionsUsedVs, m_positionsSubspace, true);
 
 	// Correct vertex positions of gripped and collided vertices
-	handleGripAndCollisionsUsedVs(s, true);       // true means to update the vertices after handling collection 
+	handleGripAndCollisionsUsedVs(s, true);       // true means to update the vertices after handling collection */
 }
 
-void ProjDynSimulator::get_reduced_s(PDPositions s, PDScalar blowupFac) {
+void ProjDynSimulator::get_reduced_s(PDPositions& s, PDScalar blowupFac) {
 	// Compute s in reduced subspace: s = q(t) + h v(t) + h^2 M^(-1) f_{ext}, here q and v are in the subspace
 	s = m_positionsSubspace + m_timeStep * m_velocitiesSubspace + m_fExtWeightedSubspace + blowupFac * m_fGravWeightedSubspace;
 	if (m_rayleighDampingAlpha > 0) {
@@ -4338,7 +4381,7 @@ void ProjDynSimulator::get_reduced_s(PDPositions s, PDScalar blowupFac) {
 	m_positionsSubspace = s;
 }
 
-void ProjDynSimulator::snapBases_compute_s(PDPositions s, PDScalar blowupFac) {
+void ProjDynSimulator::snapBases_compute_s(PDPositions& s, PDScalar blowupFac) {
 
 	if (m_rhsInterpolation) {
 		// Get actual velocities only for used vertices
@@ -4385,7 +4428,7 @@ void ProjDynSimulator::snapBases_compute_s(PDPositions s, PDScalar blowupFac) {
 
 }
 
-void ProjDynSimulator::lbsPos_verticesFullUpdate(PDPositions s) {
+void ProjDynSimulator::lbsPos_verticesFullUpdate(PDPositions& s) {
 	
 		if (m_useSparseMatricesForSubspace) {
 #ifdef PROJ_DYN_USE_CUBLAS
@@ -4432,7 +4475,7 @@ void ProjDynSimulator::lbsPos_verticesFullUpdate(PDPositions s) {
 	
 }
 
-void ProjDynSimulator::snapBasesPos_verticesFullUpdate(PDPositions s) {
+void ProjDynSimulator::snapBasesPos_verticesFullUpdate(PDPositions& s) {
 
 	if (m_useSparseMatricesForSubspace) {
 #ifdef PROJ_DYN_USE_CUBLAS
@@ -5453,7 +5496,7 @@ void ProjDynSimulator::step(int numIterations)
 					m_positions.col(d) = m_baseFunctions * s.col(d);
 				}
 		}
-		std::cout << s.row(0) << m_positions.row(0) << "  end" << std::endl;
+		//std::cout << s.row(0) << m_positions.row(0) << "  end" << std::endl;
 	}
 	
 	if (m_usePosSnapBases && !m_usingSkinSubspaces) {
