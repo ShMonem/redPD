@@ -291,7 +291,7 @@ ProjDynSimulator::ProjDynSimulator
 	// create directories to store position snapshots
 	// note snapshots are stored only if STORE_FRAMES_OFF is sat true
 	m_meshSnapshotsDirectory = "../../../results/";
-	if (STORE_FRAMES_OFF) {
+	if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
 		if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 		{
 			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + m_meshName + "/";
@@ -300,10 +300,22 @@ ProjDynSimulator::ProjDynSimulator
 				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "_gravitationalFall/";
 				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 				{
-					m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "position_snapshots/";
-					if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-					{
-						std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+					if (STORE_FRAMES_OFF && !STORE_CONSTRAINTPROJECTION_BIN) {
+						m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "position_snapshots/";
+						if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+						{
+							std::cout << "Position Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+						}
+					}
+					else if (STORE_CONSTRAINTPROJECTION_BIN && !STORE_FRAMES_OFF) {
+						m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "constraintProjection_snapshots/";
+						if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+						{
+							std::cout << "Constraints projections Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+						}
+					}
+					else {
+						std::cout << "ERROR! Please record either for position or constraint projection at a time!: " << m_meshSnapshotsDirectory << std::endl;
 					}
 				}
 			}
@@ -703,6 +715,13 @@ void PD::ProjDynSimulator::updatePODPositionsSampling(PDPositions& fullPos, PDPo
 		evaluatePositionsAtUsedVertices(fullPos, subPos);
 	}
 	else {  
+
+		/*
+		PROJ_DYN_PARALLEL_FOR
+		for(int d=0; d < 3; d++){
+			fullPos.col(d) = m_basesFunctions[d] * subPos.col(d);
+		}
+		*/
 #pragma omp parallel
 #pragma omp single nowait
 		{
@@ -714,6 +733,8 @@ void PD::ProjDynSimulator::updatePODPositionsSampling(PDPositions& fullPos, PDPo
 			fullPos.col(2) = m_basesFunctions[2] * subPos.col(2);
 		}
 	}
+
+
 }
 
 
@@ -1866,7 +1887,7 @@ void ProjDynSimulator::optimizedSetup() {
 	else { 
 		// No reduction for constraints´ projections space:
 		// In this case, no pre-computations are required, we only extend the snapshots dir name
-		if (STORE_FRAMES_OFF) {
+		if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
 			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "noConstraintProjReduction/";
 			if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 			{
@@ -1934,6 +1955,37 @@ void ProjDynSimulator::optimizedSetup() {
 
 
 	m_precomputationStopWatch.stopStopWatch();
+
+	if (STORE_CONSTRAINTPROJECTION_BIN) {
+		std::cout << "constraints include ...";
+		if (!m_springConstraints.empty()) {
+			std::cout << " spring ... ";
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "/spring/";
+		}
+		if (!m_bendingConstraints.empty()) {
+			std::cout << " bending ... ";
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "/bending/";
+		}
+		if (!m_strainConstraints.empty()) {
+			std::cout << " edges strain ... ";
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "/edgeStrain/";
+		}
+		if (!m_tetStrainConstraints.empty()) {
+			std::cout << " tets strain ... ";
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "/tetStrain/";
+		}
+		if (!m_tetExConstraints.empty()) {
+			std::cout << " tet example ... ";
+			m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "/tetExample/";
+		}
+		std::cout << "Warning: make sure that constraints are collected only for one type at a time! ..." << std::endl;
+		if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+		{
+			std::cout << "nonlinerSnaps directory ready!: " << m_meshSnapshotsDirectory << std::endl;
+		}
+
+		
+	}
 }  // end of optimized pre-computation setup
 
 void ProjDynSimulator::setup() { 
@@ -2508,7 +2560,7 @@ void ProjDynSimulator::setup() {
 		if (m_usingSkinSubspaces && !m_usePosSnapBases) {    /// Here we have Skinning positionSubspace reduction and rhdInterpolation
 			m_subspaceLHS_inner.setZero(m_baseFunctions.cols(), m_baseFunctions.cols());
 			
-			if (STORE_FRAMES_OFF) {
+			if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
 				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_pos_and_constraint/";
 				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 				{
@@ -2554,7 +2606,7 @@ void ProjDynSimulator::setup() {
 			m_projectedLHS_inner[2].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
 			
 			
-			if (STORE_FRAMES_OFF) {
+			if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
 				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_LBS_constraint/";
 				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 				{
@@ -2632,7 +2684,7 @@ void ProjDynSimulator::setup() {
 		}
 		else if (!m_usingPosSubspaces){  // m_rhsInterpolation but no position space reduction
 
-			if (STORE_FRAMES_OFF) {
+			if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
 				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_constraint/";
 				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 				{
@@ -2708,7 +2760,7 @@ void ProjDynSimulator::setup() {
 		
 		if (m_usingSkinSubspaces&& !m_usePosSnapBases) { // Slow case: using position subspaces but no rhs interpolation
 			
-			if (STORE_FRAMES_OFF) {
+			if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
 				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_pos/";
 				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 				{
@@ -3646,7 +3698,7 @@ void ProjDynSimulator::lbsConstarintsSetup() {
 
 	std::cout << "Pre-computation case: LBS for constraint projection" << std::endl;
 
-	if (STORE_FRAMES_OFF) {
+	if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
 		m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "ConsProjLBS/";
 		if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
 		{
@@ -3916,8 +3968,34 @@ void ProjDynSimulator::optimizedStep(int numIterations) {
 		else {
 			// Compute full local constaints projections
 			m_STp.setZero(m_positions.rows(), 3);
-			if (recordingPSnapshots) {
-				// TODO
+			if (STORE_CONSTRAINTPROJECTION_BIN) {
+
+				int didCollide = -1;
+				unsigned int auxSize = usedConstraints->at(0)->getP(m_positions, didCollide).rows();  // p 
+				PDPositions nonlinearSnapshots;
+				nonlinearSnapshots.setZero(numConstraints* auxSize, 3);
+
+
+				// currentAuxilaries is a vector of size e, each element is p x 3 matrix
+				for (int ind = 0; ind < numConstraints; ind++) {
+					ProjDynConstraint* c = usedConstraints->at(ind);
+					int didCollide = -1;
+					currentAuxilaries[ind] = c->getP(m_positions, didCollide);   // size p x 3
+					if (didCollide >= 0) m_collidedVerts[didCollide] = true;
+					
+					nonlinearSnapshots.block(ind* auxSize, 0, auxSize, 3) = currentAuxilaries[ind];
+				}
+				// nonlinear snapshots stored as e stacked px3 matrices: total size ep x 3
+				if (m_frameCount < NUM_CONSTRAINTPROJECTION_BIN && i == numIterations - 1) {
+					PD::storePosBinary(nonlinearSnapshots, m_meshSnapshotsDirectory + "aux_" + std::to_string(m_frameCount) + ".bin");
+				}
+
+				for (int d = 0; d < 3; d++) {
+					for (int mind = 0; mind < numConstraints; mind++) {
+						PDScalar curWeight = usedConstraints->at(mind)->getWeight();
+						fastDensePlusSparseTimesDenseCol(m_STp, usedConstraints->at(mind)->getSelectionMatrixTransposed(), currentAuxilaries[mind], d, curWeight);
+					}
+				}
 			}
 			else {	
 				m_localStepOnlyProjectStopWatch.startStopWatch();

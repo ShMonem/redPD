@@ -55,8 +55,8 @@ SOFTWARE.
 #include "ProjDynMeshSampler.h"
 #include "ProjDynRHSInterpol.h"
 
-#define PROJ_DYN_NUM_THREADS 6
-#define PROJ_DYN_EIGEN_NUM_THREADS 6
+#define PROJ_DYN_NUM_THREADS 1
+#define PROJ_DYN_EIGEN_NUM_THREADS 1
 #define PROJ_DYN_PARALLEL_FOR _Pragma("omp parallel for num_threads(PROJ_DYN_NUM_THREADS)") 
 
 // If set to true, we sparsify the matrices used in the global step and for interpolation in the subspace
@@ -75,6 +75,10 @@ SOFTWARE.
 #define STORE_FRAMES_PNG false
 // If storing frames in .off format (e.g. for FOM snapshots collection, or error computation between different reduction methods)
 #define STORE_FRAMES_OFF false
+
+// If storing nonlinear frames as .bin files
+#define STORE_CONSTRAINTPROJECTION_BIN false
+#define NUM_CONSTRAINTPROJECTION_BIN 200
 
 // characteristics, if we are using PCA bases for position space
 #define SNAPBASES_POSITION_WEIGHTING "_Volkwein_Standarized"
