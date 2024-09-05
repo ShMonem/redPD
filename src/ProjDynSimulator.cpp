@@ -65,6 +65,9 @@ ProjDynSimulator::ProjDynSimulator
 	std::string pca_directory,
 	int numSPLOCSModes,
 	std::string splocs_directory,
+	int numDEIMModes,
+	std::string deim_directory,
+	std::string deim_directory_extend,
 	int numSamplesPosSubspace,
 	PDScalar baseFunctionRadius,
 	int interpolBaseSize,
@@ -323,10 +326,132 @@ ProjDynSimulator::ProjDynSimulator
 	}
 }
 
+
 void ProjDynSimulator::finalizeBaseFunctions() {
 	m_baseFunctionsTransposed = m_baseFunctions.transpose();
 	//m_baseFunctionsSquared = m_baseFunctionsTransposed * m_baseFunctions;
 }
+void PD::ProjDynSimulator::projectToSubspace(PDPositions& b, PDPositions& x, bool isBasisOrthogonal)
+{
+	// projecting to position skinning subspace using U.transpose
+	if (!isBasisOrthogonal) {
+		// solves normal equation: 
+		// (m_baseFunctionsTransposed * m_massMatrix * m_baseFunctions) b = m_baseFunctionsTransposed * m_massMatrix * x
+		// for b: a reduces pos/ velo/..
+		PDPositions rhs = m_baseFunctionsTransposed * m_massMatrix * x;
+		b.setZero(m_baseFunctionsTransposed.rows(), 3);
+		for (int d = 0; d < 3; d++) {
+			b.col(d) = m_subspaceSolver.solve(rhs.col(d));
+		}
+	}
+	else {
+		PDMatrix projectionMat = m_baseFunctionsTransposed * m_massMatrix;
+
+		PROJ_DYN_PARALLEL_FOR
+			for (int d = 0; d < 3; d++) {
+				b.col(d) = projectionMat * x(d);
+			}
+	}
+}
+PDMatrix PD::ProjDynSimulator::createSkinningWeights(unsigned int numSamples, PDScalar rMultiplier) {
+	std::cout << "Choosing samples and comuting weights" << std::endl;
+	std::vector<unsigned int> samples = m_sampler.getSamples(numSamples);
+	PDScalar furthestDist = m_sampler.getSampleDiameter(samples);
+	PDScalar r = furthestDist * rMultiplier;
+	PDMatrix weightMat = m_sampler.getRadialBaseFunctions(samples, true, r);
+
+	return weightMat;
+}
+/* Updates the actual positions using the subspace positions, but if rhs interpolation is used
+only updates positions in the list m_usedVertices, and expects that the vector fullPos is
+size m_usedVertices.size() and will fill it corresponding to the list of used vertices.
+Otherwise expects the usual full position vector. */
+void PD::ProjDynSimulator::updatePositionsSampling(PDPositions& fullPos, PDPositions& subPos, bool usedVerticesOnly)
+{
+	if (usedVerticesOnly) {
+
+#ifdef PROJ_DYN_USE_CUBLAS
+		PDScalar one = 1;
+		for (int d = 0; d < 3; d++) {
+
+			m_multiplicationForPosUpdate.startStopWatch();
+			// m_usedVertexUpdater is a pointer. .data() retuns a pointer to a block of memory
+			// CUDAMatrixVectorMultiplier* m_usedVertexUpdater;
+			if (m_useSparseMatricesForSubspace) {
+				//m_usedVertexUpdaterSparse->mult(subPos.data() + (d * subPos.rows()), fullPos.data() + (d * fullPos.rows()), one);
+				/* Sparse multiplication does NOT seem worth it in this case */
+				m_usedVertexUpdater->mult(subPos.data() + (d * subPos.rows()), fullPos.data() + (d * fullPos.rows()), one);
+			}
+			else {
+				m_usedVertexUpdater->mult(subPos.data() + (d * subPos.rows()), fullPos.data() + (d * fullPos.rows()), one);
+			}
+			m_multiplicationForPosUpdate.stopStopWatch();
+		}
+#else
+		evaluatePositionsAtUsedVertices(fullPos, subPos);
+#endif
+	}
+	else {
+		fullPos = m_baseFunctions * subPos;
+
+	}
+}
+// used only in cases using skinSubspaces or rhsInterpolation
+void PD::ProjDynSimulator::evaluatePositionsAtUsedVertices(PDPositions& usedPos, PDPositions& subPos)
+{
+	int vSize = m_usedVertices.size();
+	//std::cout<< vSize << std::endl;
+	int subSize = subPos.rows();
+	if (m_usingSkinSubspaces) {
+		int i = 0;
+		PROJ_DYN_PARALLEL_FOR
+			for (i = 0; i < vSize; i++) {
+				int nnz = m_usedVerticesBase[i].size();
+				for (int d = 0; d < 3; d++) {
+					PDScalar sum = 0;
+					for (int j = 0; j < nnz; j++) sum += m_usedVerticesBase[i].at(j) * subPos(m_usedVerticesBaseNNZ[i].at(j), d);
+					usedPos(i, d) = sum;
+				}
+			}
+	}
+	else if (m_usePosSnapBases) {
+		int i = 0;
+		PROJ_DYN_PARALLEL_FOR
+			for (i = 0; i < vSize; i++) {
+				int nnz = m_usedVerticesXBase[i].size();
+
+				PDScalar sumX = 0;
+				for (int j = 0; j < nnz; j++) sumX += m_usedVerticesXBase[i].at(j) * subPos(m_usedVerticesXBaseNNZ[i].at(j), 0);
+				usedPos(i, 0) = sumX;
+
+			}
+
+		PROJ_DYN_PARALLEL_FOR
+			for (i = 0; i < vSize; i++) {
+				int nnz = m_usedVerticesYBase[i].size();
+
+				PDScalar sumY = 0;
+				for (int j = 0; j < nnz; j++) sumY += m_usedVerticesYBase[i].at(j) * subPos(m_usedVerticesYBaseNNZ[i].at(j), 1);
+				usedPos(i, 1) = sumY;
+
+			}
+
+		PROJ_DYN_PARALLEL_FOR
+			for (i = 0; i < vSize; i++) {
+				int nnz = m_usedVerticesZBase[i].size();
+
+				PDScalar sumZ = 0;
+				for (int j = 0; j < nnz; j++) sumZ += m_usedVerticesZBase[i].at(j) * subPos(m_usedVerticesZBaseNNZ[i].at(j), 2);
+				usedPos(i, 2) = sumZ;
+
+			}
+
+
+	}
+
+
+}
+
 
 void ProjDynSimulator::finalizeSnapBasesFunctions() {
 	PROJ_DYN_PARALLEL_FOR
@@ -334,13 +459,212 @@ void ProjDynSimulator::finalizeSnapBasesFunctions() {
 			m_basesFunctionsT[i] = m_basesFunctions[i].transpose();
 		}
 }
+void PD::ProjDynSimulator::projectToPODSubspace(PDPositions& subPos, PDPositions& fullPos, bool isBasisOrthogonal)
+{
+	if (!isBasisOrthogonal) {
+		subPos.setZero(m_basesFunctionsT[0].rows(), 3);
 
+		// projecting in parallel 
+#pragma omp parallel
+#pragma omp single nowait
+		{
+#pragma omp task
+			subPos.col(0) = m_subspaceXSolver.solve(m_basesFunctionsT[0] * m_massMatrix * fullPos.col(0));
+#pragma omp task
+			subPos.col(1) = m_subspaceYSolver.solve(m_basesFunctionsT[1] * m_massMatrix * fullPos.col(1));
+#pragma omp task
+			subPos.col(2) = m_subspaceZSolver.solve(m_basesFunctionsT[2] * m_massMatrix * fullPos.col(2));
+		}
+
+		if (m_subspaceXSolver.info() != Eigen::Success || m_subspaceYSolver.info() != Eigen::Success || m_subspaceZSolver.info() != Eigen::Success) {
+			// solving not sucssesful
+			std::cout << "FATAL ERROR! projection to nonOrthogonal basis failed" << std::endl;
+			return;
+		}
+
+	}
+	else {
+		//TODO: orthogonal case
+		// U.T M -u q_sub = U.T M q_full
+		// in the orthogonal case U.T M U = I
+		PROJ_DYN_PARALLEL_FOR
+			for (unsigned int dim = 0; dim < 3; dim++) {
+				subPos.col(dim) = m_basesFunctionsT[dim] * m_massMatrix * fullPos.col(dim);
+			}
+	}
+}
+void PD::ProjDynSimulator::projectToSparsePODSubspace(PDPositions& subPos, PDPositions& fullPos, bool isBasisOrthogonal)
+{
+	if (!isBasisOrthogonal) {
+
+		subPos.setZero(m_basesFunctionsTSparse[0].rows(), 3);
+
+		// Projecting sparse in parallel
+#pragma omp parallel
+#pragma omp single nowait
+		{
+#pragma omp task
+			subPos.col(0) = m_subspaceXSparseSolver.solve(m_basesFunctionsTSparse[0] * m_massMatrix * fullPos.col(0));
+#pragma omp task
+			subPos.col(1) = m_subspaceYSparseSolver.solve(m_basesFunctionsTSparse[1] * m_massMatrix * fullPos.col(1));
+#pragma omp task
+			subPos.col(2) = m_subspaceZSparseSolver.solve(m_basesFunctionsTSparse[2] * m_massMatrix * fullPos.col(2));
+		}
+
+		if (m_subspaceXSparseSolver.info() != Eigen::Success || m_subspaceYSparseSolver.info() != Eigen::Success || m_subspaceZSparseSolver.info() != Eigen::Success) {
+			// solving not sucssesful
+			std::cout << "FATAL ERROR! projection to nonOrthogonal basis failed" << std::endl;
+			return;
+		}
+
+	}
+	else {
+		// U.T M -u q_sub = U.T M q_full
+		// in the orthogonal case U.T M U = I
+		PROJ_DYN_PARALLEL_FOR
+			for (unsigned int dim = 0; dim < 3; dim++) {
+				subPos.col(dim) = m_basesFunctionsTSparse[dim] * m_massMatrix * fullPos.col(dim);
+			}
+	}
+}
+void PD::ProjDynSimulator::updatePODPositionsSampling(PDPositions& fullPos, PDPositions& subPos, bool usedVerticesOnly)
+{
+	if (usedVerticesOnly) {
+		evaluatePositionsAtUsedVertices(fullPos, subPos);
+	}
+	else {
+
+		/*
+		PROJ_DYN_PARALLEL_FOR
+		for(int d=0; d < 3; d++){
+			fullPos.col(d) = m_basesFunctions[d] * subPos.col(d);
+		}
+		*/
+#pragma omp parallel
+#pragma omp single nowait
+		{
+#pragma omp task
+			fullPos.col(0) = m_basesFunctions[0] * subPos.col(0);
+#pragma omp task
+			fullPos.col(1) = m_basesFunctions[1] * subPos.col(1);
+#pragma omp task
+			fullPos.col(2) = m_basesFunctions[2] * subPos.col(2);
+		}
+	}
+
+
+}
+
+
+void PD::ProjDynSimulator::createPositionSubspace(unsigned int numSamples, bool useSkinningSpace, bool usePositionPODSpace)
+{
+
+	if (useSkinningSpace && !usePositionPODSpace) {
+
+		StopWatch samplingT(10, 10);
+
+		samplingT.startStopWatch();
+		m_samples = m_sampler.getSamples(numSamples);
+		samplingT.stopStopWatch();
+		std::cout << "	Time to choose samples: " << (samplingT.lastMeasurement() / 1000000.0) << "s" << std::endl;
+
+		numSamples = m_samples.size();
+		std::sort(m_samples.begin(), m_samples.end());
+		m_samples.erase(std::unique(m_samples.begin(), m_samples.end()), m_samples.end());
+
+		PDScalar furthestDist = m_sampler.getSampleDiameter(m_samples);
+		PDScalar r = furthestDist * m_baseFunctionRadius;
+
+		samplingT.startStopWatch();
+		m_baseFunctionWeights = m_sampler.getRadialBaseFunctions(m_samples, true, r);
+		samplingT.stopStopWatch();
+		std::cout << "	Time to compute weights: " << (samplingT.lastMeasurement() / 1000000.0) << "s" << std::endl;
+
+		bool isFlat = false;
+		if (m_positions.col(2).norm() < 1e-10) isFlat = true;
+		m_baseFunctions = createSkinningSpace(m_positions, m_baseFunctionWeights, nullptr, 1U, nullptr, nullptr, isFlat);
+		//m_basefunctions (m_numVertices, 4*numSamples -3)
+	}
+	else if (usePositionPODSpace && !useSkinningSpace) {
+		// read basis form a binary file
+		PDMatrix Upca;
+		// read the .bin file according to the pr-edefined number of components in (main.cpp/ doubleHRPD)
+		if (m_usingSPLOCSPosSubspaces && !m_usingPODPosSubspaces) {
+			if (PD::loadBaseBinary(m_SPLOCSBasesDir + "K" + std::to_string(numSamples) + ".bin", Upca)) {
+				std::cout << "SPLOCS basis size is (" << Upca.rows() << "," << Upca.cols() << ")" << std::endl;
+			}
+		}
+		else if (m_usingPODPosSubspaces && !m_usingSPLOCSPosSubspaces) {
+			if (PD::loadBaseBinary(m_PCABasesDir + "K" + std::to_string(numSamples) + ".bin", Upca)) {
+				std::cout << "POD basis size is (" << Upca.rows() << "," << Upca.cols() << ")" << std::endl;
+			}
+		}
+
+		m_snapshotsBasesTmp = Upca;
+
+		if (Upca.cols() != 3 * numSamples) {
+			std::cout << "Error: dimension of of basisFunctions not matching number of POD modes!" << std::endl;
+			return;
+		}
+	}
+	else if (usePositionPODSpace && useSkinningSpace) {
+		std::cout << "usePositionPODSpace && useSkinningSpace!" << std::endl;
+
+	}
+
+	else {
+		std::cout << "Error: no basis method was defined!" << std::endl;
+	}
+
+}
+
+void PD::ProjDynSimulator::loadQDEIMnonlinearSubspace(int numQDEIMModes, bool useSkinningSpace, bool usePositionPODSpace, bool rhsInterpolation) {
+	if (!useSkinningSpace && !rhsInterpolation) {
+		PDMatrix M, S, B;
+		if (PD::loadBaseBinary("/home/shaimaa/libigl/tutorial/doubleHRPD/basisExperimentedwithPD/deim/pWeightedDeimBasis_BunnyF400K" + std::to_string(numQDEIMModes) + ".bin", M)) {
+
+			tempMqdeim = M;
+			std::cout << "V (P^T V)^{-1} = M, qdeim matrix binary file has been found, matrix has been loaded";
+			std::cout << "with size (" << tempMqdeim.rows() << "," << tempMqdeim.cols() << ")" << std::endl;
+		}
+		else {
+			std::cout << "M qdeim binary could not be loaded" << std::endl;
+		}
+		if (PD::loadBaseBinary("/home/shaimaa/libigl/tutorial/doubleHRPD/basisExperimentedwithPD/deim/pWightedDeimSelMatPoints_BunnyF400K" + std::to_string(numQDEIMModes) + ".bin", S)) {
+			tempSqdeim = S;
+			std::cout << "S qdeim matrix binary file has been found, matrix has been loaded";
+			std::cout << " with size (" << tempSqdeim.rows() << "," << tempSqdeim.cols() << ")" << std::endl;
+			//std::cout << tempSqdeim;
+
+		}
+		else {
+			std::cout << "S qdeim binary could not be loaded" << std::endl;
+		}
+		if (PD::loadBaseBinary("/home/shaimaa/libigl/tutorial/doubleHRPD/basisExperimentedwithPD/deim/pWightedDeimInterpolBlocksBunnyF400K" + std::to_string(numQDEIMModes) + ".bin", B)) {
+			qdeimBlocks = B;
+			std::cout << "qdeim interpolation blockes binary file has been found, blockes indecies have been loaded";
+			std::cout << " with size (" << qdeimBlocks.rows() << "," << qdeimBlocks.cols() << ")" << std::endl;
+			//std::cout << tempSqdeim;
+
+		}
+		else {
+			std::cout << "qdeim/deim Blockes indecies binary could not be loaded" << std::endl;
+		}
+
+
+	}
+	else {
+		std::cout << "QDEIM nonlinear reduction can be used only in combination with POD for pos subspace" << std::endl;
+		return;
+	}
+
+	//std::cout << "QDEIM nonlinear constarints projection subspace has been loaded " << std::endl;
+}
 
 PDPositions& ProjDynSimulator::getPositions()   // for simulation rendering in doubleHRPD (main.cpp)
 {
 	return m_positions;
 }
-
 /*
 PDPositions& ProjDynSimulator::getVelocities()   // can be for simulation rendering/interaction in doubleHRPD (main.cpp)
 {
@@ -385,102 +709,33 @@ void PD::ProjDynSimulator::recomputeWeightedForces() {
 		std::cout << "Error: NaN entries in recomputed external forces" << std::endl;
 	}
 }
-
-void PD::ProjDynSimulator::projectToSubspace(PDPositions& b, PDPositions& x, bool isBasisOrthogonal)
+// resolves collision for all cases:  it changes the matrx "posCorrect" at the desired vertex "v"
+void PD::ProjDynSimulator::resolveCollision(unsigned int v, PDPositions& pos, PDPositions& posCorrect)
 {
-	// projecting to position skinning subspace using U.transpose
-	if(!isBasisOrthogonal){
-		// solves normal equation: 
-		// (m_baseFunctionsTransposed * m_massMatrix * m_baseFunctions) b = m_baseFunctionsTransposed * m_massMatrix * x
-		// for b: a reduces pos/ velo/..
-		PDPositions rhs = m_baseFunctionsTransposed * m_massMatrix * x;
-		b.setZero(m_baseFunctionsTransposed.rows(), 3);
-		for (int d = 0; d < 3; d++) {
-			b.col(d) = m_subspaceSolver.solve(rhs.col(d));  
+
+	posCorrect.row(v) = pos.row(v);  // set the correction equal to current position of v
+
+	if (m_floorCollisionWeight > 0) {
+
+		if (pos(v, 1) < m_floorHeight) {
+			m_collisionCorrection = true;
+			pos(v, 1) = m_floorHeight;   // change the posiotion of the the vertex to equal the fllor hight
+
 		}
 	}
-	else{
-		PDMatrix projectionMat = m_baseFunctionsTransposed * m_massMatrix;
-		
-		PROJ_DYN_PARALLEL_FOR
-			for (int d = 0; d < 3; d++) {
-				b.col(d) = projectionMat * x(d);
-			}
+
+	for (CollisionObject& col : m_collisionObjects) {
+		PD3dVector posV = pos.row(v);
+		if (col.resolveCollision(posV)) {
+			m_collisionCorrection = true;
+			pos.row(v) = posV.transpose();
+		}
 	}
+
+
+	posCorrect.row(v) -= pos.row(v);
+	posCorrect.row(v) *= -1.;     // now the position correction is:  - (current posiotn - the foolr hight)
 }
-
-
-void PD::ProjDynSimulator::projectToPODSubspace(PDPositions& subPos, PDPositions& fullPos, bool isBasisOrthogonal)
-{
-	if(!isBasisOrthogonal){
-		subPos.setZero(m_basesFunctionsT[0].rows(), 3);
-		
-		// projecting in parallel 
-		#pragma omp parallel
-		#pragma omp single nowait
-		{
-		#pragma omp task
-		    subPos.col(0) = m_subspaceXSolver.solve(m_basesFunctionsT[0] * m_massMatrix * fullPos.col(0));
-		#pragma omp task
-		    subPos.col(1) = m_subspaceYSolver.solve(m_basesFunctionsT[1] * m_massMatrix * fullPos.col(1));
-		#pragma omp task
-		    subPos.col(2) = m_subspaceZSolver.solve(m_basesFunctionsT[2] * m_massMatrix * fullPos.col(2));
-		}
-		
-		if(m_subspaceXSolver.info()!= Eigen::Success || m_subspaceYSolver.info()!= Eigen::Success  || m_subspaceZSolver.info()!= Eigen::Success  ) {
-		  // solving not sucssesful
-		  std::cout << "FATAL ERROR! projection to nonOrthogonal basis failed" << std::endl;
-		  return;
-		}
-		
-	}
-	else{    
-		//TODO: orthogonal case
-		// U.T M -u q_sub = U.T M q_full
-		// in the orthogonal case U.T M U = I
-		PROJ_DYN_PARALLEL_FOR
-			for (unsigned int dim = 0; dim < 3; dim++) {
-				subPos.col(dim) = m_basesFunctionsT[dim] * m_massMatrix * fullPos.col(dim);
-			}
-	}
-}
-
-void PD::ProjDynSimulator::projectToSparsePODSubspace(PDPositions& subPos, PDPositions& fullPos, bool isBasisOrthogonal)
-{
-	if(!isBasisOrthogonal){
-		
-		subPos.setZero(m_basesFunctionsTSparse[0].rows(), 3);
-		
-		// Projecting sparse in parallel
-		#pragma omp parallel
-		#pragma omp single nowait
-		{
-		#pragma omp task
-		    subPos.col(0) = m_subspaceXSparseSolver.solve(m_basesFunctionsTSparse[0] * m_massMatrix * fullPos.col(0));
-		#pragma omp task
-		    subPos.col(1) = m_subspaceYSparseSolver.solve(m_basesFunctionsTSparse[1] * m_massMatrix * fullPos.col(1));
-		#pragma omp task
-		    subPos.col(2) = m_subspaceZSparseSolver.solve(m_basesFunctionsTSparse[2] * m_massMatrix * fullPos.col(2));
-		} 
-		
-		if(m_subspaceXSparseSolver.info()!= Eigen::Success || m_subspaceYSparseSolver.info()!= Eigen::Success  || m_subspaceZSparseSolver.info()!= Eigen::Success  ) {
-		  // solving not sucssesful
-		  std::cout << "FATAL ERROR! projection to nonOrthogonal basis failed" << std::endl;
-		  return;
-		}
-		
-	}
-	else{  	
-		// U.T M -u q_sub = U.T M q_full
-		// in the orthogonal case U.T M U = I
-		PROJ_DYN_PARALLEL_FOR
-			for (unsigned int dim = 0; dim < 3; dim++) {
-				subPos.col(dim) = m_basesFunctionsTSparse[dim] * m_massMatrix * fullPos.col(dim);
-			}
-	}
-}
-
-
 
 /* collect smaples (vertices/handles) to create SkinSubspaces for constraints,
    Only used in case using rhsInterpolation. */
@@ -533,218 +788,11 @@ void PD::ProjDynSimulator::createConstraintSampling(unsigned int numSamples) {
 	
 }
 
-void PD::ProjDynSimulator::createQDEIMConstraintTetStrainSampling(){
-	
-	if(qdeimBlocks.cols() == 0){
-		std::cout << "Fatal Error! QDEIM blocks indecies can not be found" << std::endl;
-		return;
-	}
-	
-	m_constraintVertexSamples.resize(qdeimBlocks.rows());
-	m_constraintTriSamples.resize(qdeimBlocks.rows());
-	m_constraintTetSamples.resize(qdeimBlocks.rows());
-	
-	// constrained tets 
-	for (int b= 0; b <= qdeimBlocks.rows(); b++){
-		m_constraintTetSamples[b] = qdeimBlocks(b, 0);   // sorted list of tet blocks picked by QDEIM algorithm
-		//std::cout << m_constraintTetSamples[b] << std::endl;
-	} 
-	
-	// assure order and uniquness
-	std::sort(m_constraintTetSamples.begin(), m_constraintTetSamples.end());
-	m_constraintTetSamples.erase(std::unique(m_constraintTetSamples.begin(), m_constraintTetSamples.end()), m_constraintTetSamples.end());
-		
-	// constrained verts
-	m_vertsPerTet = makeVertsPerTetList(m_numVertices, m_tetrahedrons);
-	m_constraintVertexSamples.clear();
-	m_constraintVertexSamples.reserve(m_constraintTetSamples.size());
-	
-	for (unsigned int tetInd : m_constraintTetSamples) {
-		if (m_vertsPerTet.at(tetInd).size() > 0) {
-			m_constraintVertexSamples.push_back(m_vertsPerTet.at(tetInd).at(0));   // constrain only first vert in the verts list of tetInd
-		}
-	}
-	
-	// assure order and uniquness
-	std::sort(m_constraintVertexSamples.begin(), m_constraintVertexSamples.end());
-	m_constraintVertexSamples.erase(std::unique(m_constraintVertexSamples.begin(), m_constraintVertexSamples.end()), m_constraintVertexSamples.end());
-	
-	// constrained tris
-	m_constraintTriSamples.clear();
-	m_constraintQDEIMTriSamples.reserve(m_constraintVertexSamples.size());
-	for (unsigned int vInd : m_constraintVertexSamples) {
-		//std::cout << vInd << std::endl;
-		if (m_vertexStars.at(vInd).size() > 0) {
-			m_constraintTriSamples.push_back(m_vertexStars.at(vInd).at(0).t1);  // constrain the first tri of the first edge in the list of vInd nighboring edges
-		}
-	}
-	
-	std::sort(m_constraintTriSamples.begin(), m_constraintTriSamples.end());
-	m_constraintTriSamples.erase(std::unique(m_constraintTriSamples.begin(), m_constraintTriSamples.end()), m_constraintTriSamples.end());
-	
-	
-	std::cout << "Total number of sampled tets/tris/verts are: " << m_constraintTetSamples.size()<< " " << m_constraintTriSamples.size()<< " " << m_constraintVertexSamples.size() << std::endl;
-}
-// used only in cases using skinSubspaces or rhsInterpolation
-void PD::ProjDynSimulator::evaluatePositionsAtUsedVertices(PDPositions& usedPos, PDPositions& subPos)
-{
-	int vSize = m_usedVertices.size();
-	//std::cout<< vSize << std::endl;
-	int subSize = subPos.rows();
-	if(m_usingSkinSubspaces){
-	int i = 0;
-	PROJ_DYN_PARALLEL_FOR
-		for (i = 0; i < vSize; i++) {
-			int nnz = m_usedVerticesBase[i].size();
-			for (int d = 0; d < 3; d++) {
-				PDScalar sum = 0;
-				for (int j = 0; j < nnz; j++) sum += m_usedVerticesBase[i].at(j) * subPos(m_usedVerticesBaseNNZ[i].at(j), d);
-				usedPos(i, d) = sum;
-			}
-		}
-	}
-	else if(m_usePosSnapBases){
-	int i = 0;
-	PROJ_DYN_PARALLEL_FOR
-		for (i = 0; i < vSize; i++) {
-			int nnz = m_usedVerticesXBase[i].size();
-		
-			PDScalar sumX = 0;
-			for (int j = 0; j < nnz; j++) sumX += m_usedVerticesXBase[i].at(j) * subPos(m_usedVerticesXBaseNNZ[i].at(j), 0);
-			usedPos(i, 0) = sumX;
-		
-		}
-		
-	PROJ_DYN_PARALLEL_FOR
-		for (i = 0; i < vSize; i++) {
-			int nnz = m_usedVerticesYBase[i].size();
-		
-			PDScalar sumY = 0;
-			for (int j = 0; j < nnz; j++) sumY += m_usedVerticesYBase[i].at(j) * subPos(m_usedVerticesYBaseNNZ[i].at(j), 1);
-			usedPos(i, 1) = sumY;
-		
-		}
-		
-	PROJ_DYN_PARALLEL_FOR
-		for (i = 0; i < vSize; i++) {
-			int nnz = m_usedVerticesZBase[i].size();
-		
-			PDScalar sumZ = 0;
-			for (int j = 0; j < nnz; j++) sumZ += m_usedVerticesZBase[i].at(j) * subPos(m_usedVerticesZBaseNNZ[i].at(j), 2);
-			usedPos(i, 2) = sumZ;
-		
-		}
-		
-		
-	}
-	
-	
-}
-
-
-
-// resolves collision for all cases:  it changes the matrx "posCorrect" at the desired vertex "v"
-void PD::ProjDynSimulator::resolveCollision(unsigned int v, PDPositions & pos, PDPositions & posCorrect)
-{  
-	
-	posCorrect.row(v) = pos.row(v);  // set the correction equal to current position of v
-
-	if (m_floorCollisionWeight > 0) {
-		
-		if (pos(v, 1) < m_floorHeight) {
-			m_collisionCorrection = true;
-			pos(v, 1) = m_floorHeight;   // change the posiotion of the the vertex to equal the fllor hight
-
-		}
-	}
-
-	for (CollisionObject& col : m_collisionObjects) {
-		PD3dVector posV = pos.row(v);
-		if (col.resolveCollision(posV)) {
-			m_collisionCorrection = true;
-			pos.row(v) = posV.transpose();
-		}
-	}
-
-
-	posCorrect.row(v) -= pos.row(v);  
-	posCorrect.row(v) *= -1.;     // now the position correction is:  - (current posiotn - the foolr hight)
-}
-
-
-/* Updates the actual positions using the subspace positions, but if rhs interpolation is used
-only updates positions in the list m_usedVertices, and expects that the vector fullPos is
-size m_usedVertices.size() and will fill it corresponding to the list of used vertices.
-Otherwise expects the usual full position vector. */
-// called only when either using skinSbspaces or rhsInterpolation
-// note: in this code, it was used only when we have both! it does not work correctly otherwise!! 
-void PD::ProjDynSimulator::updatePositionsSampling(PDPositions& fullPos, PDPositions& subPos, bool usedVerticesOnly)
-{
-	if (usedVerticesOnly) {      
-			
-#ifdef PROJ_DYN_USE_CUBLAS
-		PDScalar one = 1;
-		for (int d = 0; d < 3; d++) {
-
-			m_multiplicationForPosUpdate.startStopWatch();
-			// m_usedVertexUpdater is a pointer. .data() retuns a pointer to a block of memory
-			// CUDAMatrixVectorMultiplier* m_usedVertexUpdater;
-			if (m_useSparseMatricesForSubspace) {
-				//m_usedVertexUpdaterSparse->mult(subPos.data() + (d * subPos.rows()), fullPos.data() + (d * fullPos.rows()), one);
-				/* Sparse multiplication does NOT seem worth it in this case */
-				m_usedVertexUpdater->mult(subPos.data() + (d * subPos.rows()), fullPos.data() + (d * fullPos.rows()), one);
-			}
-			else {
-				m_usedVertexUpdater->mult(subPos.data() + (d * subPos.rows()), fullPos.data() + (d * fullPos.rows()), one);
-			}
-			m_multiplicationForPosUpdate.stopStopWatch();
-		}
-#else
-		evaluatePositionsAtUsedVertices(fullPos, subPos);
-#endif
-	}
-	else {
-		fullPos = m_baseFunctions * subPos;
-
-	}
-}
-
-void PD::ProjDynSimulator::updatePODPositionsSampling(PDPositions& fullPos, PDPositions& subPos, bool usedVerticesOnly)
-{
-	if (usedVerticesOnly) { 
-		evaluatePositionsAtUsedVertices(fullPos, subPos);
-	}
-	else {  
-
-		/*
-		PROJ_DYN_PARALLEL_FOR
-		for(int d=0; d < 3; d++){
-			fullPos.col(d) = m_basesFunctions[d] * subPos.col(d);
-		}
-		*/
-#pragma omp parallel
-#pragma omp single nowait
-		{
-#pragma omp task
-			fullPos.col(0) = m_basesFunctions[0] * subPos.col(0);
-#pragma omp task
-			fullPos.col(1) = m_basesFunctions[1] * subPos.col(1);
-#pragma omp task
-			fullPos.col(2) = m_basesFunctions[2] * subPos.col(2);
-		}
-	}
-
-
-}
-
-
-
 void PD::ProjDynSimulator::addConstraintSample(ProjDynConstraint * c)
 {
 	m_sampledConstraints.push_back(c);
 	m_constraintSamplesChanged = true;
 }
-
 /*
 void PD::ProjDynSimulator::setExamplePoses(std::vector<PDPositions> exPoses, PDScalar generalWeight, bool forSprings)
 {
@@ -790,7 +838,6 @@ void PD::ProjDynSimulator::setExamplePoses(std::vector<PDPositions> exPoses, PDS
 	}
 }
 */
-
 PDPositions PD::ProjDynSimulator::extendSurfaceDeformationToTets(PDPositions & surfacePos)
 {
 	int numInnerVerts = m_numVertices - m_numOuterVertices;
@@ -883,7 +930,6 @@ void PD::ProjDynSimulator::setExampleWeights(std::vector<PDScalar>& exWeights)
 	}
 }
 */
-
 void PD::ProjDynSimulator::updateUsedVertices()
 {
 	std::cout << "Creating a list of used vertices and adapting constraints to this list..." << std::endl;
@@ -1182,122 +1228,6 @@ void PD::ProjDynSimulator::updateUsedVertices()
 	m_constraintSamplesChanged = false;
 }
 
-
-PDMatrix PD::ProjDynSimulator::createSkinningWeights(unsigned int numSamples, PDScalar rMultiplier) {
-	std::cout << "Choosing samples and comuting weights" << std::endl;
-	std::vector<unsigned int> samples = m_sampler.getSamples(numSamples);
-	PDScalar furthestDist = m_sampler.getSampleDiameter(samples);
-	PDScalar r = furthestDist * rMultiplier;
-	PDMatrix weightMat = m_sampler.getRadialBaseFunctions(samples, true, r);
-	
-	return weightMat;
-}
-
-void PD::ProjDynSimulator::createPositionSubspace(unsigned int numSamples, bool useSkinningSpace, bool usePositionPODSpace) 
-{
-
-	if (useSkinningSpace && !usePositionPODSpace) {
-		
-		StopWatch samplingT(10, 10);
-
-		samplingT.startStopWatch();
-		m_samples = m_sampler.getSamples(numSamples);
-		samplingT.stopStopWatch();
-		std::cout << "	Time to choose samples: " << (samplingT.lastMeasurement() / 1000000.0) << "s" << std::endl;
-
-		numSamples = m_samples.size();
-		std::sort(m_samples.begin(), m_samples.end());
-		m_samples.erase(std::unique(m_samples.begin(), m_samples.end()), m_samples.end());
-
-		PDScalar furthestDist = m_sampler.getSampleDiameter(m_samples);
-		PDScalar r = furthestDist * m_baseFunctionRadius;
-
-		samplingT.startStopWatch();
-		m_baseFunctionWeights = m_sampler.getRadialBaseFunctions(m_samples, true, r);
-		samplingT.stopStopWatch();
-		std::cout << "	Time to compute weights: " << (samplingT.lastMeasurement() / 1000000.0) << "s" << std::endl;
-
-		bool isFlat = false;
-		if (m_positions.col(2).norm() < 1e-10) isFlat = true;
-		m_baseFunctions = createSkinningSpace(m_positions, m_baseFunctionWeights, nullptr, 1U, nullptr, nullptr, isFlat);
-		//m_basefunctions (m_numVertices, 4*numSamples -3)
-	}
-	else if (usePositionPODSpace && !useSkinningSpace){
-		// read basis form a binary file
-		PDMatrix Upca;
-		// read the .bin file according to the pr-edefined number of components in (main.cpp/ doubleHRPD)
-		if(m_usingSPLOCSPosSubspaces && !m_usingPODPosSubspaces){
-			if (PD::loadBaseBinary(m_SPLOCSBasesDir + "K" + std::to_string(numSamples) + ".bin", Upca)) {
-				std::cout << "SPLOCS basis size is (" << Upca.rows() << "," << Upca.cols() << ")" << std::endl;
-			}
-		}
-		else if (m_usingPODPosSubspaces && !m_usingSPLOCSPosSubspaces){
-			if (PD::loadBaseBinary(m_PCABasesDir + "K" + std::to_string(numSamples) + ".bin", Upca)) {
-				std::cout << "POD basis size is (" << Upca.rows() << "," << Upca.cols() << ")" << std::endl;
-			}
-		}
-		
-		m_snapshotsBasesTmp = Upca;
-		
-		if(Upca.cols() != 3*numSamples){
-			std::cout << "Error: dimension of of basisFunctions not matching number of POD modes!" << std::endl;
-			return;
-		}
-	}
-	else if (usePositionPODSpace && useSkinningSpace){
-		std::cout << "usePositionPODSpace && useSkinningSpace!" << std::endl;
-		
-	}
-	
-	else { 
-		std::cout << "Error: no basis method was defined!" << std::endl;
-	}
-
-}
-
-void PD::ProjDynSimulator::loadQDEIMnonlinearSubspace(int numQDEIMModes, bool useSkinningSpace, bool usePositionPODSpace, bool rhsInterpolation){
-	if(!useSkinningSpace && !rhsInterpolation){
-		PDMatrix M, S, B;
-		if (PD::loadBaseBinary("/home/shaimaa/libigl/tutorial/doubleHRPD/basisExperimentedwithPD/deim/pWeightedDeimBasis_BunnyF400K"+std::to_string(numQDEIMModes)+".bin", M)) {
-			
-			tempMqdeim = M;
-			std::cout << "V (P^T V)^{-1} = M, qdeim matrix binary file has been found, matrix has been loaded";
-			std::cout << "with size ("<< tempMqdeim.rows() << "," << tempMqdeim.cols() << ")" << std::endl;
-		}
-		else{
-			std::cout << "M qdeim binary could not be loaded" << std::endl;
-		}
-		if (PD::loadBaseBinary("/home/shaimaa/libigl/tutorial/doubleHRPD/basisExperimentedwithPD/deim/pWightedDeimSelMatPoints_BunnyF400K"+std::to_string(numQDEIMModes)+".bin", S)) {
-			tempSqdeim = S;
-			std::cout << "S qdeim matrix binary file has been found, matrix has been loaded" ;
-			std::cout << " with size ("<< tempSqdeim.rows()  << ","<< tempSqdeim.cols() << ")" << std::endl;
-			//std::cout << tempSqdeim;
-			
-		}
-		else{
-			std::cout << "S qdeim binary could not be loaded" << std::endl;
-		}
-		if (PD::loadBaseBinary("/home/shaimaa/libigl/tutorial/doubleHRPD/basisExperimentedwithPD/deim/pWightedDeimInterpolBlocksBunnyF400K"+std::to_string(numQDEIMModes)+".bin", B)) {
-			qdeimBlocks = B;
-			std::cout << "qdeim interpolation blockes binary file has been found, blockes indecies have been loaded" ;
-			std::cout << " with size ("<< qdeimBlocks.rows()  << ","<< qdeimBlocks.cols() << ")" << std::endl;
-			//std::cout << tempSqdeim;
-			
-		}
-		else{
-			std::cout << "qdeim/deim Blockes indecies binary could not be loaded" << std::endl;
-		}
-		
-		
-	}
-	else{
-		std::cout << "QDEIM nonlinear reduction can be used only in combination with POD for pos subspace" << std::endl;
-		return;
-	}
-
-	//std::cout << "QDEIM nonlinear constarints projection subspace has been loaded " << std::endl;
-}
-
 void PD::ProjDynSimulator::setExternalForces(PDPositions fExt)
 {
 	m_fExt = fExt;
@@ -1339,7 +1269,6 @@ void PD::ProjDynSimulator::setFrictionCoefficient(PDScalar coeff, PDScalar rCoef
 		m_repulsionCoeff = rCoeff;
 	}
 }
-
 
 void PD::ProjDynSimulator::addEdgeSprings(PDScalar weight, PDScalar rangeMin, PDScalar rangeMax)
 {
@@ -1417,6 +1346,268 @@ void PD::ProjDynSimulator::addBendingConstraints(PDScalar weight, bool preventBe
 
 	if (flatBending) m_flatBending = true;
 }
+// used by each set of constraint in the simulations, case rhsInterpolation
+void ProjDynSimulator::addConstraint(ProjDynConstraint* c, bool alwaysAdd) {
+	m_isSetup = false;
+	m_constraints.push_back(c);
+	//if (m_rhsInterpolation){
+	bool containsSample = false;
+	if (!alwaysAdd) {
+		if (c->getMainVertexIndex() > 0) {
+			int vInd = c->getMainVertexIndex();
+			if (std::find(m_constraintVertexSamples.begin(), m_constraintVertexSamples.end(), vInd) != m_constraintVertexSamples.end()) {
+				containsSample = true;
+			}
+		}
+		else if (c->getMainTriangleIndex() > 0) {
+			int tInd = c->getMainTriangleIndex();
+			if (std::find(m_constraintTriSamples.begin(), m_constraintTriSamples.end(), tInd) != m_constraintTriSamples.end()) {
+				containsSample = true;
+			}
+		}
+		else if (c->getMainTetIndex() > 0) {
+			int tetInd = c->getMainTetIndex();
+			if (std::find(m_constraintTetSamples.begin(), m_constraintTetSamples.end(), tetInd) != m_constraintTetSamples.end()) {
+				containsSample = true;
+			}
+		}
+	}
+	if (containsSample || alwaysAdd) {
+		addConstraintSample(c);   // add c to m_sampledConstraints
+	}
+	if (alwaysAdd) {
+		m_additionalConstraints.push_back(c);
+	}
+	//}
+}
+
+void ProjDynSimulator::printTimeMeasurements() {
+
+	std::cout << "===========================================================" << std::endl;
+
+	if (m_usingSkinSubspaces) {
+		std::cout << "LBS reduction for position subspace" << std::endl;
+		std::cout << m_numSamplesPosSubspace << " pos basis." << std::endl;
+
+	}
+	if (m_usePosSnapBases) {
+		if (m_usingSPLOCSPosSubspaces) {
+			std::cout << "SPOLCS reduction for position subspace" << std::endl;
+			std::cout << m_numPosSPLOCSModes << " components " << std::endl;
+		}
+		else {
+			std::cout << "POD reduction for position subspace" << std::endl;
+			std::cout << m_numPosPODModes << " components " << std::endl;
+		}
+	}
+	if (m_rhsInterpolation) {
+		std::cout << "LBS reduction constraints subspace" << std::endl;
+		std::cout << m_rhsInterpolBaseSize << " constraints projection basis" << std::endl;
+
+	}
+
+	std::cout << "m_timeStep: " << m_timeStep << std::endl;
+	std::vector< ProjDynConstraint* >* usedConstraints = &m_constraints;
+	int numConstraints = usedConstraints->size();
+
+	std::cout << "# of constraints: " << numConstraints << ", using " << m_usedVertices.size() << " of " << m_numVertices << " vertices." << std::endl;
+	std::cout << "Time for precomputation: " << m_precomputationStopWatch.lastMeasurement() / 1000 << " milliseconds" << std::endl;
+	PDScalar fps = 1000000. / (m_localStepStopWatch.evaluateAverage() * m_numIterations + m_globalStepStopWatch.evaluateAverage() * m_numIterations + m_updatingVPosStopWatch.evaluateAverage() * m_numIterations);
+	PDScalar fpsD = 1000000. / (m_localStepStopWatch.evaluateAverage() * m_numIterations + m_globalStepStopWatch.evaluateAverage() * m_numIterations + m_updatingVPosStopWatch.evaluateAverage() * m_numIterations + m_fullUpdateStopWatch.evaluateAverage());
+	std::cout << "FPS: " << fps << " (" << fpsD << ")" << std::endl;
+
+
+	std::cout << "Average time for local step: " << m_localStepStopWatch.evaluateAverage() << " microseconds" << std::endl;
+	std::cout << "Average time for global step: " << m_globalStepStopWatch.evaluateAverage() << " microseconds" << std::endl;
+
+	std::cout << "Average time for only the constraint projection in the local step (includes summation if using rhs interpolation): " << m_localStepOnlyProjectStopWatch.evaluateAverage() << " microseconds" << std::endl;
+	std::cout << "Average time for the rest of the local step: " << m_localStepRestStopWatch.evaluateAverage() << " microseconds" << std::endl;
+	std::cout << "        ----> RHS-Reset/Summation/Projection+Moment. " << (m_localStepRestStopWatch.evaluateAverage() - m_momentumStopWatch.evaluateAverage() - m_constraintSummationStopWatch.evaluateAverage()) << "/" << m_constraintSummationStopWatch.evaluateAverage() << "/" << m_momentumStopWatch.evaluateAverage() << " microseconds" << std::endl;
+#ifdef PROJ_DYN_USE_CUBLAS
+	if (m_usingSkinSubspaces && m_rhsInterpolation) {
+		std::cout << "        ----> Multiplication for Projection set/get/Dgemv: ";
+		m_rhsEvaluator->printTimings();
+		std::cout << std::endl;
+	}
+#endif
+
+	std::cout << "Average time for global step: " << m_globalStepStopWatch.evaluateAverage() << " microseconds" << std::endl;
+	std::cout << "Average time for updating relevant v. pos.: " << m_updatingVPosStopWatch.evaluateAverage() << " microseconds" << std::endl;
+#ifdef PROJ_DYN_USE_CUBLAS
+	if (m_usingSkinSubspaces) {
+		std::cout << "        ----> Multiplication(set/get/Dgemv)/Ordering: " << (m_multiplicationForPosUpdate.evaluateAverage()) << "(";
+		m_usedVertexUpdater->printTimings();
+		std::cout << ")" << "/" << (m_sortingForPosUpdate.evaluateAverage()) << " (three multiplciations per inner it.)" << std::endl;
+	}
+#endif
+	std::cout << "Average time for a full step with " << m_numIterations << " steps: " << m_totalStopWatch.evaluateAverage() << std::endl;
+	std::cout << "Average time of only the surrounding block of a full step: " << m_surroundingBlockStopWatch.evaluateAverage() << std::endl;
+	std::cout << "			----> Full vertex update: " << m_fullUpdateStopWatch.evaluateAverage() << std::endl;
+	float totalAverage = m_totalStopWatch.evaluateAverage();
+	float surroundingAverage = m_surroundingBlockStopWatch.evaluateAverage();
+	float restTime = totalAverage - surroundingAverage;
+	float localToGlobal = (float)m_localStepStopWatch.evaluateAverage() / (float)(m_globalStepStopWatch.evaluateAverage() + m_updatingVPosStopWatch.evaluateAverage() + m_localStepStopWatch.evaluateAverage());
+	float localAverage = restTime * localToGlobal;
+	float globalAverage = restTime * (1.f - localToGlobal);
+	std::cout << "The local steps took " << (localAverage / totalAverage) << "% of the total time for a step." << std::endl;
+	std::cout << "The global (incl. v. pos. upd.) steps took " << (globalAverage / totalAverage) << "% of the total time for a step." << std::endl;
+	std::cout << "The surrounding block took " << (surroundingAverage / totalAverage) << "% of the total time for a step." << std::endl;
+	std::cout << "		----> Full update of vertex positions: " << m_fullUpdateStopWatch.evaluateAverage() << std::endl;
+	std::cout << "Total number of refactorizations: " << m_numRefactorizations << std::endl;
+	std::cout << "===========================================================" << std::endl;
+}
+
+PDScalar PD::ProjDynSimulator::evaluateEnergy(PDPositions& q, PDPositions& s)
+{
+	PDPositions momVec = (q - s);
+	/*
+	for (unsigned int v = 0; v < m_numVertices; v++) {
+	momVec.row(v) *= std::sqrt(m_vertexMasses(v));
+	}
+	PDScalar momE = momVec.norm();
+	momE = momE * momE;
+	*/ // here was a close for the commented part (shaimaa 20.01.22)
+	PDScalar momE = (momVec.transpose() * m_massMatrix * momVec).trace();
+	PDScalar innerE = 0;
+	int dummyI = 0;
+	PROJ_DYN_PARALLEL_FOR
+		for (int i = 0; i < m_constraints.size(); i++) {
+			ProjDynConstraint* c = m_constraints[i];
+			PDPositions actualP = c->getSelectionMatrix() * q;
+			PDPositions desiredP = c->getP(q, dummyI);
+			PDScalar pNormSquared = (actualP - desiredP).norm();
+			pNormSquared = pNormSquared * pNormSquared;
+			innerE += (c->getWeight() / 2.) * pNormSquared;
+		}
+	PDScalar totE = (1. / (2. * m_timeStep * m_timeStep)) * momE + innerE;
+	std::cout << "Mom. En. : " << momE << "; Elastic Potential: " << innerE << "; Total: " << totE << std::endl;
+	return totE;
+}
+/*
+void PD::ProjDynSimulator::setInitialPos(PDPositions & startPos)
+{
+	std::cout << "===PD::ProjDynSimulator::setInitialPos===" << std::endl;
+	PDMatrix posMat;
+	if (PD::loadBaseBinary(PD::getMeshFileName(m_meshURL, "_start.pos"), posMat)) {
+		std::cout << "Found previously extended and possibly projected starting positions, loaded these..." << std::endl;
+		m_positions = posMat;
+		m_initialPos = m_positions;
+	}
+	else {
+		std::cout << "Setting initial configuration..." << std::endl;
+
+		if (!m_hasTetrahedrons) {
+			m_positions = startPos;
+		}
+		else {
+			std::cout << "	Extending initial surface configuration to interior..." << std::endl;
+			m_positions = extendSurfaceDeformationToTets(startPos);
+		}
+		m_initialPos = m_positions;
+
+	}
+	if (m_usingSkinSubspaces) {
+		std::cout << "	Projecting initial configuration to subspace..." << std::endl;
+		projectToSubspace(m_positionsSubspace, m_positions, false);
+		m_positions = m_baseFunctions * m_positionsSubspace;
+		m_initialPos = m_positions;
+		m_initialPosSub = m_positionsSubspace;
+	}
+	posMat = m_positions;
+	PD::storeBaseBinary(posMat, PD::getMeshFileName(m_meshURL, "_start.pos"));
+}
+*/
+void PD::ProjDynSimulator::setBlowup(PDScalar strength)
+{
+	m_blowupStrength = strength;
+	for (auto& g : m_snapshotGroups) {
+		if (g.getName() == "tetstrain" || g.getName() == "tetex") {
+			g.setBlowup(strength);
+		}
+	}
+}
+
+void PD::ProjDynSimulator::addHandleConstraint(CenterConstraint* cc)
+{
+	m_handleConstraints.push_back(cc);
+}
+
+void PD::ProjDynSimulator::changeTimeStep(PDScalar newTimeStep)
+{
+	//std::cout << "===PD::ProjDynSimulator::changeTimeStep===" << std::endl;
+	if (m_usingSkinSubspaces) {
+		m_timeStep = newTimeStep;
+
+		refreshLHS();
+
+		m_rhsFirstTermMatrix = m_rhsFirstTermMatrixPre * (1. / (m_timeStep * m_timeStep));
+
+		if (m_useSparseMatricesForSubspace) {
+			m_rhsFirstTermMatrixSparse = m_rhsFirstTermMatrix.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
+		}
+
+		recomputeWeightedForces();
+	}
+	else {
+		std::cout << "Changing time-steps is not supported for other than SkinSubspaces case!" << std::endl;
+	}
+}
+
+void ProjDynSimulator::addAdditionalConstraints(PDPositions& pos, PDPositions& rhs, bool* collidedVertices) {
+
+	if (!m_additionalConstraints.empty()) {
+
+		int numAddConstraints = m_additionalConstraints.size();
+		//std::cout << " m_additionalConstraints size -------------------- " << numAddConstraints << std::endl;
+		if (m_additionalConstraintsAuxTemp.size() != numAddConstraints) {
+			m_additionalConstraintsAuxTemp.resize(numAddConstraints);
+		}
+
+		if (m_usingSkinSubspaces) {
+
+			PROJ_DYN_PARALLEL_FOR
+				for (int j = 0; j < numAddConstraints; j++) {
+					ProjDynConstraint* c = m_additionalConstraints.at(j);
+					int didCollide = -1;
+					PDPositions aux = c->getP(pos, didCollide);
+
+					m_additionalConstraintsAuxTemp[j] = c->getSubspaceRHSMat(m_baseFunctionsTransposed) * (aux * c->getWeight()) * m_stiffnessFactor;   // U.T S.T p
+
+					if (didCollide > 0) collidedVertices[didCollide] = true;
+
+					PROJ_DYN_PARALLEL_FOR
+						for (int d = 0; d < 3; d++) {
+							for (int j = 0; j < numAddConstraints; j++) {
+								rhs.col(d) += m_additionalConstraintsAuxTemp[j].col(d);
+							}
+						}
+				}
+		}
+		else {
+			PROJ_DYN_PARALLEL_FOR
+				for (int j = 0; j < numAddConstraints; j++) {
+					ProjDynConstraint* c = m_additionalConstraints.at(j);
+					int didCollide = -1;
+					PDPositions aux = c->getP(pos, didCollide);
+
+					m_additionalConstraintsAuxTemp[j] = c->getSelectionMatrixTransposed() * (aux * c->getWeight()) * m_stiffnessFactor;  // S.T p
+
+					if (didCollide > 0) collidedVertices[didCollide] = true;
+
+					PROJ_DYN_PARALLEL_FOR
+						for (int d = 0; d < 3; d++) {
+							for (int j = 0; j < numAddConstraints; j++) {
+								rhs.col(d) += m_additionalConstraintsAuxTemp[j].col(d);
+
+							}
+						}
+				}
+		}
+
+
+
+	}
+}
 
 
 PD::ProjDynSimulator::~ProjDynSimulator()    /// a destructor for the function
@@ -1430,7 +1621,6 @@ PD::ProjDynSimulator::~ProjDynSimulator()    /// a destructor for the function
 	}*/
 	
 }
-
 /*
 void PD::ProjDynSimulator::setParallelVUpdateBlockSize(int blocks)
 {
@@ -1541,271 +1731,6 @@ PDPositions & PD::ProjDynSimulator::getUsedVertexPositions()
 }
 */
 
-// used by each set of constraint in the simulations, case rhsInterpolation
-void ProjDynSimulator::addConstraint(ProjDynConstraint* c, bool alwaysAdd) {
-	m_isSetup = false;
-	m_constraints.push_back(c);
-	//if (m_rhsInterpolation){
-		bool containsSample = false;
-		if (!alwaysAdd) {
-			if (c->getMainVertexIndex() > 0) {
-				int vInd = c->getMainVertexIndex();
-				if (std::find(m_constraintVertexSamples.begin(), m_constraintVertexSamples.end(), vInd) != m_constraintVertexSamples.end()) {
-					containsSample = true;
-				}
-			}
-			else if (c->getMainTriangleIndex() > 0) {
-				int tInd = c->getMainTriangleIndex();
-				if (std::find(m_constraintTriSamples.begin(), m_constraintTriSamples.end(), tInd) != m_constraintTriSamples.end()) {
-					containsSample = true;
-				}
-			}
-			else if (c->getMainTetIndex() > 0) {
-				int tetInd = c->getMainTetIndex();
-				if (std::find(m_constraintTetSamples.begin(), m_constraintTetSamples.end(), tetInd) != m_constraintTetSamples.end()) {
-					containsSample = true;
-				}
-			}
-		}
-		if (containsSample || alwaysAdd) {
-			addConstraintSample(c);   // add c to m_sampledConstraints
-		}
-		if (alwaysAdd) {
-			m_additionalConstraints.push_back(c);
-		}
-	//}
-}
-
-void ProjDynSimulator::printTimeMeasurements() {
-	
-	std::cout << "===========================================================" << std::endl;
-
-	if(m_usingSkinSubspaces){
-	std::cout << "LBS reduction for position subspace" << std::endl;
-	std::cout << m_numSamplesPosSubspace << " pos basis." << std::endl;
-	
-	}
-	if(m_usePosSnapBases){
-		if (m_usingSPLOCSPosSubspaces) {
-			std::cout << "SPOLCS reduction for position subspace" << std::endl;
-			std::cout << m_numPosSPLOCSModes << " components " << std::endl;
-		}
-		else {
-			std::cout << "POD reduction for position subspace" << std::endl;
-			std::cout << m_numPosPODModes << " components " << std::endl;
-		}
-	}
-	if (m_rhsInterpolation) {
-		std::cout << "LBS reduction constraints subspace" << std::endl;
-		std::cout << m_rhsInterpolBaseSize << " constraints projection basis" << std::endl;
-
-	}
-
-	std::cout << "m_timeStep: " << m_timeStep << std::endl;
-	std::vector< ProjDynConstraint* >* usedConstraints = &m_constraints;
-	int numConstraints = usedConstraints->size();
-	
-	std::cout << "# of constraints: " << numConstraints << ", using " << m_usedVertices.size() << " of " << m_numVertices << " vertices." << std::endl;
-	std::cout << "Time for precomputation: " << m_precomputationStopWatch.lastMeasurement() / 1000 << " milliseconds" << std::endl;
-	PDScalar fps = 1000000. / (m_localStepStopWatch.evaluateAverage() * m_numIterations + m_globalStepStopWatch.evaluateAverage() * m_numIterations + m_updatingVPosStopWatch.evaluateAverage() * m_numIterations);
-	PDScalar fpsD = 1000000. / (m_localStepStopWatch.evaluateAverage() * m_numIterations + m_globalStepStopWatch.evaluateAverage() * m_numIterations + m_updatingVPosStopWatch.evaluateAverage() * m_numIterations + m_fullUpdateStopWatch.evaluateAverage());
-	std::cout << "FPS: " << fps << " (" << fpsD << ")" << std::endl;
-	
-	
-	std::cout << "Average time for local step: " << m_localStepStopWatch.evaluateAverage() << " microseconds" << std::endl;
-	std::cout << "Average time for global step: " << m_globalStepStopWatch.evaluateAverage() << " microseconds" << std::endl;
-	
-	std::cout << "Average time for only the constraint projection in the local step (includes summation if using rhs interpolation): " << m_localStepOnlyProjectStopWatch.evaluateAverage() << " microseconds" << std::endl;
-	std::cout << "Average time for the rest of the local step: " << m_localStepRestStopWatch.evaluateAverage() << " microseconds" << std::endl;
-	std::cout << "        ----> RHS-Reset/Summation/Projection+Moment. " << (m_localStepRestStopWatch.evaluateAverage() - m_momentumStopWatch.evaluateAverage() - m_constraintSummationStopWatch.evaluateAverage()) << "/" << m_constraintSummationStopWatch.evaluateAverage() << "/" << m_momentumStopWatch.evaluateAverage() << " microseconds" << std::endl;
-#ifdef PROJ_DYN_USE_CUBLAS
-	if (m_usingSkinSubspaces && m_rhsInterpolation) {
-		std::cout << "        ----> Multiplication for Projection set/get/Dgemv: ";
-		m_rhsEvaluator->printTimings();
-		std::cout << std::endl;
-	}
-#endif
-
-	std::cout << "Average time for global step: " << m_globalStepStopWatch.evaluateAverage() << " microseconds" << std::endl;
-	std::cout << "Average time for updating relevant v. pos.: " << m_updatingVPosStopWatch.evaluateAverage() << " microseconds" << std::endl;
-#ifdef PROJ_DYN_USE_CUBLAS
-	if (m_usingSkinSubspaces) {
-		std::cout << "        ----> Multiplication(set/get/Dgemv)/Ordering: " << (m_multiplicationForPosUpdate.evaluateAverage()) << "(";
-		m_usedVertexUpdater->printTimings();
-		std::cout << ")" << "/" << (m_sortingForPosUpdate.evaluateAverage()) << " (three multiplciations per inner it.)" << std::endl;
-	}
-#endif
-	std::cout << "Average time for a full step with " << m_numIterations << " steps: " << m_totalStopWatch.evaluateAverage() << std::endl;
-	std::cout << "Average time of only the surrounding block of a full step: " << m_surroundingBlockStopWatch.evaluateAverage() << std::endl;
-	std::cout << "			----> Full vertex update: " << m_fullUpdateStopWatch.evaluateAverage() << std::endl;
-	float totalAverage = m_totalStopWatch.evaluateAverage();
-	float surroundingAverage = m_surroundingBlockStopWatch.evaluateAverage();
-	float restTime = totalAverage - surroundingAverage;
-	float localToGlobal = (float)m_localStepStopWatch.evaluateAverage() / (float)(m_globalStepStopWatch.evaluateAverage() + m_updatingVPosStopWatch.evaluateAverage() + m_localStepStopWatch.evaluateAverage());
-	float localAverage = restTime * localToGlobal;
-	float globalAverage = restTime * (1.f - localToGlobal);
-	std::cout << "The local steps took " << (localAverage / totalAverage) << "% of the total time for a step." << std::endl;
-	std::cout << "The global (incl. v. pos. upd.) steps took " << (globalAverage / totalAverage) << "% of the total time for a step." << std::endl;
-	std::cout << "The surrounding block took " << (surroundingAverage / totalAverage) << "% of the total time for a step." << std::endl;
-	std::cout << "		----> Full update of vertex positions: " << m_fullUpdateStopWatch.evaluateAverage() << std::endl;
-	std::cout << "Total number of refactorizations: " << m_numRefactorizations << std::endl;
-	std::cout << "===========================================================" << std::endl;
-}
-
-
-PDScalar PD::ProjDynSimulator::evaluateEnergy(PDPositions & q, PDPositions & s)
-{
-	PDPositions momVec = (q - s);
-	/*
-	for (unsigned int v = 0; v < m_numVertices; v++) {
-	momVec.row(v) *= std::sqrt(m_vertexMasses(v));
-	}
-	PDScalar momE = momVec.norm();
-	momE = momE * momE;
-	*/ // here was a close for the commented part (shaimaa 20.01.22)
-	PDScalar momE = (momVec.transpose() * m_massMatrix * momVec).trace();
-	PDScalar innerE = 0;
-	int dummyI = 0;
-	PROJ_DYN_PARALLEL_FOR
-		for (int i = 0; i < m_constraints.size(); i++) {
-			ProjDynConstraint* c = m_constraints[i];
-			PDPositions actualP = c->getSelectionMatrix() * q;
-			PDPositions desiredP = c->getP(q, dummyI);
-			PDScalar pNormSquared = (actualP - desiredP).norm();
-			pNormSquared = pNormSquared * pNormSquared;
-			innerE += (c->getWeight() / 2.) * pNormSquared;
-		}
-	PDScalar totE = (1. / (2. * m_timeStep * m_timeStep)) * momE + innerE;
-	std::cout << "Mom. En. : " << momE << "; Elastic Potential: " << innerE << "; Total: " << totE << std::endl;
-	return totE;
-}
-
-/*
-void PD::ProjDynSimulator::setInitialPos(PDPositions & startPos)
-{
-	std::cout << "===PD::ProjDynSimulator::setInitialPos===" << std::endl;
-	PDMatrix posMat;
-	if (PD::loadBaseBinary(PD::getMeshFileName(m_meshURL, "_start.pos"), posMat)) {
-		std::cout << "Found previously extended and possibly projected starting positions, loaded these..." << std::endl;
-		m_positions = posMat;
-		m_initialPos = m_positions;
-	}
-	else {
-		std::cout << "Setting initial configuration..." << std::endl;
-
-		if (!m_hasTetrahedrons) {
-			m_positions = startPos;
-		}
-		else {
-			std::cout << "	Extending initial surface configuration to interior..." << std::endl;
-			m_positions = extendSurfaceDeformationToTets(startPos);
-		}
-		m_initialPos = m_positions;
-
-	}
-	if (m_usingSkinSubspaces) {
-		std::cout << "	Projecting initial configuration to subspace..." << std::endl;
-		projectToSubspace(m_positionsSubspace, m_positions, false);
-		m_positions = m_baseFunctions * m_positionsSubspace;
-		m_initialPos = m_positions;
-		m_initialPosSub = m_positionsSubspace;
-	}
-	posMat = m_positions;
-	PD::storeBaseBinary(posMat, PD::getMeshFileName(m_meshURL, "_start.pos"));
-}
-*/
-void PD::ProjDynSimulator::setBlowup(PDScalar strength)
-{
-	m_blowupStrength = strength;
-	for (auto& g : m_snapshotGroups) {
-		if (g.getName() == "tetstrain" || g.getName() == "tetex") {
-			g.setBlowup(strength);
-		}
-	}
-}
-
-void PD::ProjDynSimulator::addHandleConstraint(CenterConstraint * cc)
-{
-	m_handleConstraints.push_back(cc);
-}
-
-void PD::ProjDynSimulator::changeTimeStep(PDScalar newTimeStep)
-{
-	//std::cout << "===PD::ProjDynSimulator::changeTimeStep===" << std::endl;
-	if (m_usingSkinSubspaces) {
-		m_timeStep = newTimeStep;
-
-		refreshLHS();
-
-		m_rhsFirstTermMatrix = m_rhsFirstTermMatrixPre * (1. / (m_timeStep * m_timeStep));
-
-		if (m_useSparseMatricesForSubspace) {
-			m_rhsFirstTermMatrixSparse = m_rhsFirstTermMatrix.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
-		}
-
-		recomputeWeightedForces();
-	}
-	else {
-		std::cout << "Changing time-steps is not supported for other than SkinSubspaces case!" << std::endl;
-	}
-}
-
-
-void ProjDynSimulator::addAdditionalConstraints(PDPositions& pos, PDPositions& rhs, bool* collidedVertices) {
-
-	if (!m_additionalConstraints.empty()) {
-
-		int numAddConstraints = m_additionalConstraints.size();
-		//std::cout << " m_additionalConstraints size -------------------- " << numAddConstraints << std::endl;
-		if (m_additionalConstraintsAuxTemp.size() != numAddConstraints) {
-			m_additionalConstraintsAuxTemp.resize(numAddConstraints);
-		}
-
-		if (m_usingSkinSubspaces) {
-		
-		PROJ_DYN_PARALLEL_FOR
-			for (int j = 0; j < numAddConstraints; j++) {
-				ProjDynConstraint* c = m_additionalConstraints.at(j);
-				int didCollide = -1;
-				PDPositions aux = c->getP(pos, didCollide);
-				
-				m_additionalConstraintsAuxTemp[j] = c->getSubspaceRHSMat(m_baseFunctionsTransposed) * (aux * c->getWeight()) * m_stiffnessFactor;   // U.T S.T p
-				
-				if (didCollide > 0) collidedVertices[didCollide] = true;
-				
-				PROJ_DYN_PARALLEL_FOR
-					for (int d = 0; d < 3; d++) {
-						for (int j = 0; j < numAddConstraints; j++) {
-							rhs.col(d) += m_additionalConstraintsAuxTemp[j].col(d);
-						}
-					}
-			}
-		}
-		else {
-			PROJ_DYN_PARALLEL_FOR
-				for (int j = 0; j < numAddConstraints; j++) {
-					ProjDynConstraint* c = m_additionalConstraints.at(j);
-					int didCollide = -1;
-					PDPositions aux = c->getP(pos, didCollide);
-		
-					m_additionalConstraintsAuxTemp[j] = c->getSelectionMatrixTransposed() * (aux * c->getWeight())  * m_stiffnessFactor;  // S.T p
-					
-					if (didCollide > 0) collidedVertices[didCollide] = true;
-					
-					PROJ_DYN_PARALLEL_FOR
-						for (int d = 0; d < 3; d++) {
-							for (int j = 0; j < numAddConstraints; j++) {
-								rhs.col(d) += m_additionalConstraintsAuxTemp[j].col(d);
-						
-							}
-						}
-				}
-		}
-
-
-
-	}
-}
 
 /* RHSInterpolationGroup is the fitting approximation of the RHS into the skinning subspace
    Initialized the rhs interpolation/fitting method. */
@@ -1851,6 +1776,60 @@ void PD::ProjDynSimulator::initQDEIMRHSInterpolGroup(RHSInterpolationGroup& g, s
 	//Initialized the rhs interpolation/fitting method for the QDEIM samples/basis .
 	g.initQDEIMInterpolation(m_numVertices, samples, Mqdeim);
 }
+
+void PD::ProjDynSimulator::createQDEIMConstraintTetStrainSampling() {
+
+	if (qdeimBlocks.cols() == 0) {
+		std::cout << "Fatal Error! QDEIM blocks indecies can not be found" << std::endl;
+		return;
+	}
+
+	m_constraintVertexSamples.resize(qdeimBlocks.rows());
+	m_constraintTriSamples.resize(qdeimBlocks.rows());
+	m_constraintTetSamples.resize(qdeimBlocks.rows());
+
+	// constrained tets 
+	for (int b = 0; b <= qdeimBlocks.rows(); b++) {
+		m_constraintTetSamples[b] = qdeimBlocks(b, 0);   // sorted list of tet blocks picked by QDEIM algorithm
+		//std::cout << m_constraintTetSamples[b] << std::endl;
+	}
+
+	// assure order and uniquness
+	std::sort(m_constraintTetSamples.begin(), m_constraintTetSamples.end());
+	m_constraintTetSamples.erase(std::unique(m_constraintTetSamples.begin(), m_constraintTetSamples.end()), m_constraintTetSamples.end());
+
+	// constrained verts
+	m_vertsPerTet = makeVertsPerTetList(m_numVertices, m_tetrahedrons);
+	m_constraintVertexSamples.clear();
+	m_constraintVertexSamples.reserve(m_constraintTetSamples.size());
+
+	for (unsigned int tetInd : m_constraintTetSamples) {
+		if (m_vertsPerTet.at(tetInd).size() > 0) {
+			m_constraintVertexSamples.push_back(m_vertsPerTet.at(tetInd).at(0));   // constrain only first vert in the verts list of tetInd
+		}
+	}
+
+	// assure order and uniquness
+	std::sort(m_constraintVertexSamples.begin(), m_constraintVertexSamples.end());
+	m_constraintVertexSamples.erase(std::unique(m_constraintVertexSamples.begin(), m_constraintVertexSamples.end()), m_constraintVertexSamples.end());
+
+	// constrained tris
+	m_constraintTriSamples.clear();
+	m_constraintQDEIMTriSamples.reserve(m_constraintVertexSamples.size());
+	for (unsigned int vInd : m_constraintVertexSamples) {
+		//std::cout << vInd << std::endl;
+		if (m_vertexStars.at(vInd).size() > 0) {
+			m_constraintTriSamples.push_back(m_vertexStars.at(vInd).at(0).t1);  // constrain the first tri of the first edge in the list of vInd nighboring edges
+		}
+	}
+
+	std::sort(m_constraintTriSamples.begin(), m_constraintTriSamples.end());
+	m_constraintTriSamples.erase(std::unique(m_constraintTriSamples.begin(), m_constraintTriSamples.end()), m_constraintTriSamples.end());
+
+
+	std::cout << "Total number of sampled tets/tris/verts are: " << m_constraintTetSamples.size() << " " << m_constraintTriSamples.size() << " " << m_constraintVertexSamples.size() << std::endl;
+}
+
  
 void ProjDynSimulator::optimizedSetup() {
 
@@ -1987,1148 +1966,6 @@ void ProjDynSimulator::optimizedSetup() {
 		
 	}
 }  // end of optimized pre-computation setup
-
-void ProjDynSimulator::setup() { 
-	
-	// we come here directly after printing mesh statistics
-	std::cout << "Setting simulation..." << std::endl;
-	//std::cout << m_positions << std::endl;  //  same initial m_positions for all
-
-#ifndef EIGEN_DONT_PARALLELIZE
-	Eigen::setNbThreads(PROJ_DYN_NUM_THREADS);
-#endif 
-
-	m_precomputationStopWatch.startStopWatch();
-
-	m_positionCorrections.setZero(m_positions.rows(), 3);
-	
-	/* First, in case we use subspaces to reduce position, we create or load position subspace basis functions */
-	if (m_usingPosSubspaces) {
-		//bool loadSuccess = false;
-		if (m_usingSkinSubspaces && !m_usePosSnapBases) {
-			std::cout << "Creating subspaces..." << std::endl;
-			createPositionSubspace(m_numSamplesPosSubspace,true, false); // pick wich true/false: do we useSkinningSpace? or usingPODPosSubSpace?
-			finalizeBaseFunctions(); 
-		}
-		else if (m_usePosSnapBases && !m_usingSkinSubspaces){
-			std::cout << "Loading subspaces..." << std::endl;
-			if (m_usingPODPosSubspaces) {
-				createPositionSubspace(m_numPosPODModes, false, true);  // here we choose usingPODPosSubSpace
-				std::cout << "POD subspaces have been loaded..." << std::endl;
-			}
-			else if (m_usingSPLOCSPosSubspaces)
-			{
-				createPositionSubspace(m_numPosSPLOCSModes, false, true);  // here we choose usingPODPosSubSpace
-				std::cout << "SPLOCS subspaces have been loaded..." << std::endl;
-			}
-			
-			// In the POD case, different handling of basis are required, 
-			// we decople the (X, Y, Z) dimensions and use three matrices so that we solve in parallel for each
-			// slicing m_baseFunctions to m_basesFunctions[0], m_basesFunctions[1] and m_basesFunctions[1] 
-			// m_numPosPODModes+1: because we add the original mesh as a component too
-			m_basesFunctions.resize(3);
-			m_basesFunctionsT.resize(3);
-			
-			m_basesFunctionsSparse.resize(3);
-			m_basesFunctionsTSparse.resize(3);
-
-
-			m_basesFunctions[0].setZero(m_snapshotsBasesTmp.rows(), m_numPosPODModes+1);
-			m_basesFunctions[1].setZero(m_snapshotsBasesTmp.rows(), m_numPosPODModes+1);
-			m_basesFunctions[2].setZero(m_snapshotsBasesTmp.rows(), m_numPosPODModes+1);
-			
-			
-			if(3*m_numPosPODModes != m_snapshotsBasesTmp.cols()){  
-				std::cout << "Sizes are not matching... we have "<<  m_snapshotsBasesTmp.cols() <<" columns and 3*m_numPosPODModes = "<< 3*m_numPosPODModes <<  std::endl;
-			}
-			
-			
-			//PROJ_DYN_PARALLEL_FOR
-			for (int k = 0; k < m_numPosPODModes; k++){
-				//std::cout << normFactor << std::endl;
-				for(int v = 0 ; v < m_numVertices; v++){
-					// using different signs for the basis rotates the fist frame!
-					m_basesFunctions[0](v, k) = m_snapshotsBasesTmp(v, k);
-					m_basesFunctions[1](v, k) = m_snapshotsBasesTmp(v, m_numPosPODModes + k);
-					m_basesFunctions[2](v, k) = m_snapshotsBasesTmp(v, 2*m_numPosPODModes + k);
-				}
-			}
-			// add the original mesh as the component
-			for(int v = 0 ; v < m_numVertices; v++){
-					m_basesFunctions[0](v, m_numPosPODModes) = m_positions(v,0);
-					m_basesFunctions[1](v, m_numPosPODModes) = m_positions(v,1);
-					m_basesFunctions[2](v, m_numPosPODModes) = m_positions(v,2);
-			}
-							
-				
-			if (m_basesFunctions[0].hasNaN() || m_basesFunctions[1].hasNaN() || m_basesFunctions[2].hasNaN()) {
-				std::cout << "Error: NaN entries in POD basis matrixies" << std::endl;
-			}
-				
-			finalizeSnapBasesFunctions();   // this function does finalize the three matrices
-		}
-		
-	// Sparse subspace basis needs to be available before the snapshot groups get initialized
-		if(m_useSparseMatricesForSubspace){
-			std::cout << "Sparsifing POD base matrcies... " << std::endl;
-			if(m_usingSkinSubspaces && !m_usePosSnapBases){
-				// case Skinning subspaces
-				m_baseFunctionsSparse = m_baseFunctions.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-				m_baseFunctionsTransposedSparse = m_baseFunctionsTransposed.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-			}
-			if(m_usePosSnapBases && !m_usingSkinSubspaces){
-			// case POD subspaces
-				
-				m_basesFunctionsSparse[0] = m_basesFunctions[0].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-				m_basesFunctionsTSparse[0] = m_basesFunctionsT[0].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-				
-				m_basesFunctionsSparse[1] = m_basesFunctions[1].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-				m_basesFunctionsTSparse[1] = m_basesFunctionsT[1].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-				
-				m_basesFunctionsSparse[2] = m_basesFunctions[2].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-				m_basesFunctionsTSparse[2] = m_basesFunctionsT[2].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-			}
-		}
-		/*
-		if(m_usingQDEIMComponents){
-
-			// load and prepare the M and S mats to do nonlinear reduction
-			loadQDEIMnonlinearSubspace(m_numQDEIMModes, m_usingSkinSubspaces, m_usingPODPosSubspaces, m_rhsInterpolation);
-			int constSize = 0;
-			int p = 1;
-			if (m_TetStrainOnly) {
-				p = 3;
-				constSize = 3;
-				}
-			
-			
-			if(m_solveDeimLS){
-				deimBasisCols = m_numQDEIMModes;
-			}
-			else{
-				deimBasisCols = m_numQDEIMModes * p;
-			}	
-				
-			//m_Mqdeim = V (P^T V)^{-1} 
-			m_xMqdeim.setZero(tempMqdeim.rows(), deimBasisCols);
-			m_yMqdeim.setZero(tempMqdeim.rows(), deimBasisCols);
-			m_zMqdeim.setZero(tempMqdeim.rows(), deimBasisCols);
-			
-			
-			m_SqdeimX.resize(m_numQDEIMModes);
-			m_SqdeimY.resize(m_numQDEIMModes);
-			m_SqdeimZ.resize(m_numQDEIMModes);
-			
-			if (3*deimBasisCols == tempMqdeim.cols() && m_numQDEIMModes == tempSqdeim.rows()){
-			
-			//PROJ_DYN_PARALLEL_FOR
-				for (int k = 0; k < deimBasisCols; k++){
-					//std::cout << k << std::endl;
-					for(int v = 0 ; v < tempMqdeim.rows() ; v++){
-						// filling only the required number of modes from the loded binary
-						m_xMqdeim(v, k) = tempMqdeim(v, k);
-						m_yMqdeim(v, k) = tempMqdeim(v, deimBasisCols + k);
-						m_zMqdeim(v, k) = tempMqdeim(v, 2*deimBasisCols + k);
-					}
-				}
-				
-				
-				m_Mqdeim.resize(3);
-				m_Mqdeim[0] = m_xMqdeim;
-				m_Mqdeim[1] = m_yMqdeim;
-				m_Mqdeim[2] = m_zMqdeim;
-				
-				if(tempSqdeim.cols()==3){
-					//PROJ_DYN_PARALLEL_FOR 
-						// just for the names of the matrices to be consistent but this step is not necessary
-						for (int k = 0; k < m_numQDEIMModes; k++){
-							m_SqdeimX[k] = tempSqdeim(k, 0);
-							m_SqdeimY[k] = tempSqdeim(k, 1);
-							m_SqdeimZ[k] = tempSqdeim(k, 2);
-						}
-					m_Sqdeim.resize(3);
-					m_Sqdeim[0] = m_SqdeimX;
-					m_Sqdeim[1] = m_SqdeimY;
-					m_Sqdeim[2] = m_SqdeimZ;								
-				}		
-				else{
-					std::cout << "Fatal error! in Qdeim selection mat dimension" << std::endl;
-					return;
-				}
-
-					std::cout << "QDEIM nonlinear subspaces have been loaded..." << std::endl;
-				
-			}
-			else{
-				std::cout << "FATAL ERROR!  in QDEIM matrices dimension" << std::endl;
-				return;
-			}
-		
-			m_xMqdeimSparse = m_xMqdeim.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-			m_yMqdeimSparse = m_yMqdeim.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-			m_zMqdeimSparse = m_zMqdeim.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
-				
-		} */
-	} // End of basis loading 
-	
-	/*  Second, if using subspaces, after finalizing the basis function (basis and basis.T ready!), we set up projection of full positions into the subspace.
-	Initial subspace positions/velocities will be computed from full positions/velocities. */
-	
-	if(m_usingPosSubspaces){
-		if (m_usingSkinSubspaces && !m_usePosSnapBases) {
-			std::cout << "Projecting positions, velocities and forces into the Skinning subspace... " << std::endl;
-			// We need to project the current positions to the subspace, which will be
-			// done by solving a  least squares problem since the subspace is not assumed
-			// to be orthonormal.
-			PDMatrix L = m_baseFunctionsTransposed * m_massMatrix * m_baseFunctions;
-			m_subspaceSolver.compute(L);
-
-			m_positionsSubspace.setZero(m_baseFunctions.cols(), 3);
-			m_velocitiesSubspace.setZero(m_baseFunctions.cols(), 3);
-
-			projectToSubspace(m_positionsSubspace, m_positions, false);
-			projectToSubspace(m_velocitiesSubspace, m_velocities, false);
-
-			m_positions = m_baseFunctions * m_positionsSubspace;
-			m_velocities = m_baseFunctions * m_velocitiesSubspace;
-		}
-		else if(m_usePosSnapBases && !m_usingSkinSubspaces){
-			
-			std::cout << "Prepapring subSpcaces and POD Subspaces solvers.... " << std::endl;
-			// TODO: We need to project the current positions to the subspace, which can be done through matrix-vector product 
-			// because in this case matrices are assumed to be orthonormal.
-			std::vector<PDMatrix> m_basesFunctionsSquared;
-			m_basesFunctionsSquared.resize(3);
-			if (!isPosSnapBasesOrtho) {
-				m_basesFunctionsSquared[0] = m_basesFunctionsT[0] * m_massMatrix * m_basesFunctions[0];
-				m_basesFunctionsSquared[1] = m_basesFunctionsT[1] * m_massMatrix * m_basesFunctions[1];
-				m_basesFunctionsSquared[2] = m_basesFunctionsT[2] * m_massMatrix * m_basesFunctions[2];
-
-#pragma omp parallel
-#pragma omp single nowait
-				{
-#pragma omp task
-					m_subspaceXSolver.compute(m_basesFunctionsSquared[0]);
-#pragma omp task
-					m_subspaceYSolver.compute(m_basesFunctionsSquared[1]);
-#pragma omp task
-					m_subspaceZSolver.compute(m_basesFunctionsSquared[2]);
-				}
-
-				if (m_subspaceXSolver.info() != Eigen::Success || m_subspaceYSolver.info() != Eigen::Success || m_subspaceZSolver.info() != Eigen::Success) {
-					// solving failed
-					std::cout << "FATAL ERROR! subspaceSolvers for nonOrthogonal basis failed" << std::endl;
-					return;
-				}
-				if (m_useSparseMatricesForSubspace) {
-					PDSparseMatrix m_baseXFunctionsSquaredSparse, m_baseYFunctionsSquaredSparse, m_baseZFunctionsSquaredSparse;
-					m_baseXFunctionsSquaredSparse = m_basesFunctionsTSparse[0] * m_massMatrix * m_basesFunctionsSparse[0];
-					m_baseYFunctionsSquaredSparse = m_basesFunctionsTSparse[1] * m_massMatrix * m_basesFunctionsSparse[1];
-					m_baseZFunctionsSquaredSparse = m_basesFunctionsTSparse[2] * m_massMatrix * m_basesFunctionsSparse[2];
-					
-
-#pragma omp parallel
-#pragma omp single nowait
-					{
-#pragma omp task
-						m_subspaceXSparseSolver.compute(m_baseXFunctionsSquaredSparse);
-#pragma omp task
-						m_subspaceYSparseSolver.compute(m_baseYFunctionsSquaredSparse);
-#pragma omp task
-						m_subspaceZSparseSolver.compute(m_baseZFunctionsSquaredSparse);
-					}
-				}
-			}
-
-			m_positionsSubspace.setZero(m_basesFunctions[0].cols(), 3);
-			m_velocitiesSubspace.setZero(m_basesFunctions[0].cols(), 3);
-
-			std::cout << "Projecting positions, velocities and forces into the POD subspace... " << std::endl;
-						
-			if(m_useSparseMatricesForSubspace){
-				projectToSparsePODSubspace(m_positionsSubspace, m_positions, isPosSnapBasesOrtho);   
-				projectToSparsePODSubspace(m_velocitiesSubspace, m_velocities, isPosSnapBasesOrtho);
-			}
-			else{
-				// inialize subPos and subVeloceties from the fullPos and fullVeloceties
-				projectToPODSubspace(m_positionsSubspace, m_positions, isPosSnapBasesOrtho); 
-				projectToPODSubspace(m_velocitiesSubspace, m_velocities, isPosSnapBasesOrtho);
-			}
-			
-			// Full = Basis * reduced: I do not think we need to do this with POD basis again, full positions is already the initial positions, or?
-			//std::cout << "Updating full positions, velocities ... " << std::endl;
-			
-			//std::cout << "Update ready... " << std::endl;
-		}
-		
-	}
-
-
-	// Collect constraints for building global system and interpolation subspaces for rhs interpolation
-	// (if no rhs interpolation is used, we simply collect all constraints, otherwise we only
-	// use constraints from the main group and treat the rest as additional constraints) (?)
-	
-	/* the "m_constraints" are the ones added in main.cpp after the simulator has been initiated
-	   example: sim->addTetStrain(0.00051, 1.f, 1.f); (in main.cpp) */
-	std::vector< ProjDynConstraint* >* usedConstraints = &m_constraints;
-	std::vector< ProjDynConstraint* > collectedConstraints;
-		
-	
-	if (m_rhsInterpolation || (m_usingQDEIMComponents && m_solveDeimLS) ) {  // TODO: This case (m_usingQDEIMComponents && m_solveDeimLS) not yet tested.
-		std::cout << "Collecting constraints for interpolation..." << std::endl;
-		collectedConstraints.clear();
-		for (ProjDynConstraint* c : m_bendingConstraints) {
-			collectedConstraints.push_back(c);
-		}
-		
-		for (ProjDynConstraint* c : m_strainConstraints) {
-			collectedConstraints.push_back(c);
-		}
-		
-		for (ProjDynConstraint* c : m_collisionConstraints) {
-			collectedConstraints.push_back(c);
-		}
-		
-		for (ProjDynConstraint* c : m_tetStrainConstraints) {
-			collectedConstraints.push_back(c);
-		}
-		
-		for (ProjDynConstraint* c : m_additionalConstraints) {
-			collectedConstraints.push_back(c);
-		}
-		
-		usedConstraints = &collectedConstraints;
-		
-		// Here we create a preliminary sampling of elements which are used
-		// to choose which constraints should be evaluated.
-		// These will be overwritten if constraint groups are used
-		// that suggest DEIM samples.
-		std::cout << "Sampling constraints..." ;
-		if (m_rhsInterpolation ){
-			createConstraintSampling(m_numConstraintSamples);	
-		}
-		else{
-			
-			createQDEIMConstraintTetStrainSampling();
-			
-		}
-		   
-		//std::cout << " DONE! " << std::endl;
-	}
-
-	
-
-	// If using r.h.s. interpolation, build interpolation subspaces
-	// and constraint sampling for each group.
-	// The LHS matrix will also be built from these constraint interpolation groups.
-	
-	// Set up interpolation groups and adapt the lhs side matrix for using them
-	if (m_rhsInterpolation || (m_usingQDEIMComponents && m_solveDeimLS) ) {
-		std::cout << "Initiating snapshot groups for constraints ... " << std::endl;
-		m_snapshotGroups.clear();
-		// RHSInterpolationGroup initializes the full set of constraints 
-		if (!m_springConstraints.empty()) {
-			m_snapshotGroups.push_back(RHSInterpolationGroup("spring", m_springConstraints, m_positions,
-				m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
-		}
-		if (!m_bendingConstraints.empty() && !m_flatBending) {
-			m_snapshotGroups.push_back(RHSInterpolationGroup("bend", m_bendingConstraints, m_positions,
-				m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
-		}
-		if (!m_strainConstraints.empty()) {
-			m_snapshotGroups.push_back(RHSInterpolationGroup("strain", m_strainConstraints, m_positions,
-				m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
-		}
-		if (!m_tetStrainConstraints.empty()) {
-			m_snapshotGroups.push_back(RHSInterpolationGroup("tetstrain", m_tetStrainConstraints, m_positions,
-				m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
-		}
-		if (!m_tetExConstraints.empty()) {
-			m_snapshotGroups.push_back(RHSInterpolationGroup("tetex", m_tetExConstraints, m_positions,
-				m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
-		}
-
-		// If snapshot groups are used they need to be initialized
-		if(m_rhsInterpolation){
-			for (auto& g : m_snapshotGroups) {
-				// Initialization of the group depends on the constraint that's being used
-				// initialize the reduced constraints projection for each group
-				if (g.getName() == "bend") {
-					initRHSInterpolGroup(g, m_constraintVertexSamples); //, hessian);
-				}
-				else if (g.getName() == "spring") {
-					initRHSInterpolGroup(g, m_constraintVertexSamples); //, hessian);
-				}
-				else if (g.getName() == "strain") {
-					initRHSInterpolGroup(g, m_constraintTriSamples); //, hessian);
-				}
-				else if (g.getName() == "tetstrain" || g.getName() == "tetex") {
-					initRHSInterpolGroup(g, m_constraintTetSamples); //, hessian);
-				}
-				else {
-					std::cout << "ERROR: unknown rhs interpolation group: " << g.getName() << "!" << std::endl;
-				}
-
-				// Maintain list of constraints that have been sampled
-				std::vector<ProjDynConstraint*>& sampledCons = g.getSampledConstraints();
-				for (ProjDynConstraint* c : sampledCons) m_sampledConstraints.push_back(c);
-				
-				
-			}
-			
-			std::cout << " LBS Snapshot groups for constraints has been initialized!" << std::endl;
-		
-		}
-		else {  // if(m_usingQDEIMComponents && m_solveDeimLS)
-			for (auto& g : m_snapshotGroups) {
-				// Initialization of the group depends on the constraint that's being used
-				// initialize the reduced constraints projection for each group
-				
-				if (g.getName() == "tetstrain" || g.getName() == "tetex") {
-				
-					//for (int m: m_constraintTetSamples) std::cout << m <<std::endl;
-					initQDEIMRHSInterpolGroup(g, m_constraintTetSamples, m_Mqdeim); 
-					
-					
-				}
-				else{
-					std::cout << "QDEIM Snapshot groups are not ready for this group!" << g.getName() << std::endl;
-				}
-				/*
-				// TODO: currently QDEIM is implemented only for tet strains, we need to do the rest of the constarints groups
-				else if (g.getName() == "spring") {
-					initQDEIMRHSInterpolGroup(g, m_constraintVertexSamples); //, hessian);
-				}
-				else if (g.getName() == "strain") {
-					initQDEIMRHSInterpolGroup(g, m_constraintTriSamples); //, hessian);
-				}
-				else if (g.getName() == "bend") {
-					initQDEIMRHSInterpolGroup(g, m_constraintVertexSamples); //, hessian);
-				}
-				else {
-					std::cout << "ERROR: unknown rhs interpolation group: " << g.getName() << "!" << std::endl;
-				} */
-
-				// Maintain list of constraints that have been sampled
-				std::vector<ProjDynConstraint*>& sampledCons = g.getSampledConstraints();
-							
-				for (ProjDynConstraint* c : sampledCons) m_sampledConstraints.push_back(c);
-			}
-			
-			std::cout << " QDEIM Snapshot groups for constraints has been initialized!" << std::endl;
-		}
-	}
-
-	/* Initialize the LHS and RHS matrices for the global system: */
-	
-	// 1) Compute the momentum part of the lhs and rhs matrices of the global step
-	// in case no position space reduction, or we run full simulation, the solver uses these terms (no projection required)
-	std::cout << "Initiating momentum term of LHS and RHS matrices ..." << std::endl;
-	m_lhsMatrix = m_massMatrix;
-	m_lhsMatrix *= 1.f / (m_timeStep * m_timeStep);
-	m_rhsMasses.setZero(m_numVertices);
-	for (int v = 0; v < m_numVertices; v++) {
-		m_rhsMasses(v) = m_vertexMasses(v) / (m_timeStep * m_timeStep);
-	}
-
-	/* And, if we use position spaces reduction, we project the momentum terms in bothe RHS and RHL to low dim subspaces*/
-	
-	if (m_usingSkinSubspaces&& !m_usePosSnapBases) {
-		std::cout << "Projecting the momentum term RHS to skinning subspaces, for the global system ..." << std::endl;
-		m_rhsFirstTermMatrixPre = m_baseFunctionsTransposed * m_massMatrix * m_baseFunctions;
-		m_rhsFirstTermMatrix = m_rhsFirstTermMatrixPre * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)
-		rhs2.setZero(m_baseFunctions.cols(), 3);
-		
-		std::cout << "Projecting the momentum term LHS to skinning subspaces, for the global system ..." << std::endl;
-		// Momentum term
-		m_subspaceLHS_mom = m_baseFunctionsTransposed * m_lhsMatrix * m_baseFunctions;       // * (m_timeStep * m_timeStep);
-		PDMatrix eps(m_subspaceLHS_mom.rows(), m_subspaceLHS_mom.rows());
-		eps.setIdentity();
-		eps *= 1e-10;
-		m_subspaceLHS_mom += eps;   // m_subspaceLHS_mom = (U.T M U / h^2)
-		
-	}
-	else if (m_usePosSnapBases && !m_usingSkinSubspaces) {
-		m_projectedLHS_mom.resize(3);
-		m_projectedLHS_inner.resize(3);
-		m_projectedRHS_mom.resize(3);
-		m_projectedRHS_mom_pre.resize(3);
-		m_projectedlhsMatrix.resize(3);
-		m_projectedlhsMatrixSparse.resize(3);
-		m_projectedRHS_momSparse.resize(3);
-		m_projectedRHS_mom_preSparse.resize(3);
-
-
-		
-		std::cout << "Projecting the momentum term RHS matrices to POD subspaces, for the global system ..." << std::endl;
-		
-		if(isPosSnapBasesOrtho){  //in the orthogonal case: U.T M U = Identity
-			m_projectedRHS_mom_pre[0].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-			m_projectedRHS_mom_pre[1].setIdentity(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
-			m_projectedRHS_mom_pre[2].setIdentity(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());	
-			
-			m_projectedRHS_mom[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-			m_projectedRHS_mom[1].setZero(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
-			m_projectedRHS_mom[2].setZero(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());
-			
-		}
-		else{
-			m_projectedRHS_mom_pre[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-			m_projectedRHS_mom_pre[1].setZero(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
-			m_projectedRHS_mom_pre[2].setZero(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());
-			
-			m_projectedRHS_mom[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-			m_projectedRHS_mom[1].setZero(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
-			m_projectedRHS_mom[2].setZero(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());
-			
-			#pragma omp parallel
-			#pragma omp single nowait
-			{
-			#pragma omp task
-				m_projectedRHS_mom_pre[0] = (m_basesFunctionsT[0] * m_massMatrix * m_basesFunctions[0]);
-			#pragma omp task
-				m_projectedRHS_mom_pre[1] = (m_basesFunctionsT[1] * m_massMatrix * m_basesFunctions[1]);	
-			#pragma omp task
-				m_projectedRHS_mom_pre[2] = (m_basesFunctionsT[2] * m_massMatrix * m_basesFunctions[2]);	
-			}		
-		}	
-		
-		#pragma omp parallel
-		#pragma omp single nowait
-		{
-		#pragma omp task
-			m_projectedRHS_mom[0] = m_projectedRHS_mom_pre[0] * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)
-		#pragma omp task
-			m_projectedRHS_mom[1] = m_projectedRHS_mom_pre[1] * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)	
-		#pragma omp task
-			m_projectedRHS_mom[2] = m_projectedRHS_mom_pre[2] * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)	
-		}
-				
-		if (m_projectedRHS_mom[0].hasNaN() || m_projectedRHS_mom[1].hasNaN() || m_projectedRHS_mom[2].hasNaN() ) {
-			std::cout << "Warning: projected momentum RHS term has NaN values." << std::endl;
-		}
-		
-		std::cout << "Projecting the momentum term LHS matrices to POD subspaces, for the global system ..." << std::endl;
-		PDMatrix eps(  m_projectedLHS_mom[0].rows(),   m_projectedLHS_mom[0].rows());
-		eps.setIdentity();
-		eps *= 1e-10;
-		//std::cout << "Projected the momentum term LHS matrices to POD subspaces, for the global system ..." << std::endl;
-		
-		// Momentum term: m_subspaceLHS_mom = (U.T M U/h^2)
-		if(isPosSnapBasesOrtho){  //in the orthogonal case: U.T M U = Identity
-			
-			  m_projectedLHS_mom[0].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-			  m_projectedLHS_mom[1].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-			  m_projectedLHS_mom[2].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());			
-			#pragma omp parallel
-			#pragma omp single nowait
-			{
-			#pragma omp task
-				  m_projectedLHS_mom[0] *= (1. / (m_timeStep * m_timeStep)); 
-			#pragma omp task
-				  m_projectedLHS_mom[1] *= (1. / (m_timeStep * m_timeStep)); 
-			#pragma omp task
-				  m_projectedLHS_mom[2] *= (1. / (m_timeStep * m_timeStep)); 		
-			}
-		}
-		else{
-			#pragma omp parallel
-			#pragma omp single nowait
-			{
-			#pragma omp task
-				  m_projectedLHS_mom[0] = m_basesFunctionsT[0] * m_lhsMatrix * m_basesFunctions[0]; 
-			#pragma omp task
-				  m_projectedLHS_mom[1] = m_basesFunctionsT[1] * m_lhsMatrix * m_basesFunctions[1]; 
-			#pragma omp task
-				  m_projectedLHS_mom[2] = m_basesFunctionsT[2] * m_lhsMatrix * m_basesFunctions[2]; 		
-			}
-		}
-		//std::cout <<   m_projectedLHS_mom[0].rows() << " " <<   m_projectedLHS_mom[0].cols() << std::endl;
-		//std::cout<< "Projecting momentum terms has been done!.." << std::endl;
-		
-		if (  m_projectedLHS_mom[0].hasNaN() ||   m_projectedLHS_mom[1].hasNaN() ||   m_projectedLHS_mom[2].hasNaN() ) {
-			std::cout << "Warning: projected momentum LHS term has NaN values." << std::endl;
-		}
-	}
-	
-	
-	// 2) Compute the constraint part of the global step
-	// If using rhs interpolation, let the constraint groups set up the constraint part of the LHS matrix
-	if (m_rhsInterpolation) {
-		std::cout << "Building and factorizing the complete LHS matrix... " << std::endl;
-			
-		if (m_usingSkinSubspaces && !m_usePosSnapBases) {    /// Here we have Skinning positionSubspace reduction and rhdInterpolation
-			m_subspaceLHS_inner.setZero(m_baseFunctions.cols(), m_baseFunctions.cols());
-			
-			if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
-				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_pos_and_constraint/";
-				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-				{
-					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
-				}
-			}
-
-			std::cout << "Simulation case: Skinning subspaces for positions and LS Fitting for constraint projection" << std::endl;
-			
-			// Projection terms for each snapshot group
-			for (auto& g : m_snapshotGroups) {
-				m_subspaceLHS_inner += g.getLHSMatrixSubspace(m_baseFunctions, m_baseFunctionsTransposed);
-				// m_subspaceLHS_inner = Sum_i U.T lambda_i S_i.T S_i U
-			}
-			// In case of flat bending, there is no bending constraint group but the bending terms
-			// still need to be added to the lhs
-			if (m_flatBending && !m_bendingConstraints.empty()) {
-				for (auto c : m_bendingConstraints) {
-					PDMatrix tmp = (m_baseFunctionsTransposed * c->getSelectionMatrixTransposed()) * (c->getSelectionMatrix() * m_baseFunctions);
-					tmp *= c->getWeight();
-					if (tmp.hasNaN()) {
-						std::cout << "Error while constructing lhs..." << std::endl;
-					}
-					m_subspaceLHS_inner += tmp;
-				}
-			}
-			// Additional constraints: we then add more terms to m_subspaceLHS_inner.
-			for (auto c : m_additionalConstraints) {
-				PDMatrix tmp = (m_baseFunctionsTransposed * c->getSelectionMatrixTransposed()) * (c->getSelectionMatrix() * m_baseFunctions);
-				tmp *= c->getWeight();
-				m_subspaceLHS_inner += tmp;
-			}
-			
-			m_lhsMatrixSampled = m_subspaceLHS_mom  + m_subspaceLHS_inner;    // m_lhsMatrixSampled = (1/ h^2) U.T M U + Sum_i U.T lambda_i S_i.T S_i U
-			m_denseSolver.compute(m_lhsMatrixSampled);                        // factorizing for the linear global solve
-			if (m_denseSolver.info() != Eigen::Success) {
-				std::cout << "Warning: Factorization denseSolver of LHS matrix for global system was not successful!.. make sure PROJ_DYN_SPARSIFY is set TRUE!" << std::endl;
-			}
-		}
-		else if(m_usePosSnapBases && !m_usingSkinSubspaces){  /// Here we have POD positionSubspace and rhdInterpolation
-			m_projectedLHS_inner[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-			m_projectedLHS_inner[1].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-			m_projectedLHS_inner[2].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-			
-			
-			if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
-				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_LBS_constraint/";
-				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-				{
-					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
-				}
-			}
-			std::cout << "Simulation case: POD subspaces for positions and LS Fitting for constraint projection" << std::endl;
-			
-			PDSparseMatrix conMat(m_lhsMatrix.rows(), m_lhsMatrix.cols());
-			conMat.setZero();
-			std::vector<Eigen::Triplet<PDScalar>> entries;
-			for (auto& c : m_constraints) {
-				PDSparseMatrixRM& selMat = c->getSelectionMatrix();
-				
-				for (int k = 0; k < selMat.outerSize(); ++k)
-					for (PDSparseMatrixRM::InnerIterator it(selMat, k); it; ++it)
-					{
-						for (PDSparseMatrixRM::InnerIterator it2(selMat, k); it2; ++it2)
-						{
-							entries.push_back(Eigen::Triplet<PDScalar>(it.col(), it2.col(), it.value() * it2.value() * c->getWeight()));
-						}
-					}
-			}
-			conMat.setFromTriplets(entries.begin(), entries.end());
-			//Additional constraints: we then add more terms to m_subspaceLHS_inner.
-			for (auto c : m_additionalConstraints) {
-				PDSparseMatrix tmp = ( c->getSelectionMatrixTransposed()) * (c->getSelectionMatrix() );
-				tmp *= c->getWeight();
-				conMat += tmp;
-			}
-			
-			#pragma omp parallel
-				#pragma omp single nowait
-				{
-				#pragma omp task
-					m_projectedLHS_inner[0] = m_basesFunctionsT[0] * conMat * m_basesFunctions[0]; 
-				#pragma omp task
-					m_projectedLHS_inner[1] = m_basesFunctionsT[1] * conMat * m_basesFunctions[1];  
-				#pragma omp task
-					m_projectedLHS_inner[2] = m_basesFunctionsT[2] * conMat * m_basesFunctions[2];  	
-				}
-				if (m_projectedLHS_inner[0].hasNaN() || m_projectedLHS_inner[1].hasNaN() || m_projectedLHS_inner[2].hasNaN() ) {
-					std::cout << "Error: projected constraints LHS term non-orthogonal has NaN values." << std::endl;
-				}
-			#pragma omp parallel
-			#pragma omp single nowait
-			{
-			#pragma omp task
-				m_projectedlhsMatrix[0] =   m_projectedLHS_mom[0] + m_projectedLHS_inner[0] ;   // U.T (M/h^2 )U  + U.T  lambda S.T S U
-			#pragma omp task
-				m_projectedlhsMatrix[1] =   m_projectedLHS_mom[1] + m_projectedLHS_inner[1] ;  
-			#pragma omp task
-				m_projectedlhsMatrix[2] =   m_projectedLHS_mom[2] + m_projectedLHS_inner[2] ; 	
-			}
-			if (m_projectedlhsMatrix[0].hasNaN() || m_projectedlhsMatrix[1].hasNaN() || m_projectedlhsMatrix[2].hasNaN() ) {
-				std::cout << "Error: projected LHS has NaN values." << std::endl;
-			}
-					
-			#pragma omp parallel
-			#pragma omp single nowait
-			{
-			#pragma omp task
-				m_denseXSolver.compute(m_projectedlhsMatrix[0]);  
-			#pragma omp task
-				m_denseYSolver.compute(m_projectedlhsMatrix[1]);  
-			#pragma omp task
-				m_denseZSolver.compute(m_projectedlhsMatrix[2]);  	
-			} 
-			if (m_denseXSolver.info() != Eigen::Success || m_denseYSolver.info() != Eigen::Success || m_denseZSolver.info() != Eigen::Success) {   
-			std::cout << "Warning: Factorization denseSolver X/Y/Z of LHS matrix for global system was not successful!.." << std::endl;
-			}
-			std::cout << "Factorization denseSolver X/Y/Z of LHS matrix for global system was successful!.." << std::endl;
-			//m_projectedLHS_inner[0] = m_subspaceLHS_inner.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);					
-
-		}
-		else if (!m_usingPosSubspaces){  // m_rhsInterpolation but no position space reduction
-
-			if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
-				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_constraint/";
-				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-				{
-					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
-				}
-			}
-			std::cout << "Simulation case: No subspace reducgion for positions and LS Fitting for constraint projection" << std::endl;
-			
-			PDSparseMatrix conMat(m_lhsMatrix.rows(), m_lhsMatrix.cols());
-
-			conMat.setZero();
-			std::vector<Eigen::Triplet<PDScalar>> entries;
-			for (auto& c : collectedConstraints) {
-				PDSparseMatrixRM& selMat = c->getSelectionMatrix();
-				for (int k = 0; k < selMat.outerSize(); ++k)
-					for (PDSparseMatrixRM::InnerIterator it(selMat, k); it; ++it)
-					{
-						for (PDSparseMatrixRM::InnerIterator it2(selMat, k); it2; ++it2)
-						{
-							entries.push_back(Eigen::Triplet<PDScalar>(it.col(), it2.col(), it.value() * it2.value() * c->getWeight()));
-						}
-					}
-			}
-			conMat.setFromTriplets(entries.begin(), entries.end());
-			//Additional constraints: we then add more terms to m_subspaceLHS_inner.
-			for (auto c : m_additionalConstraints) {
-				PDSparseMatrix tmp = ( c->getSelectionMatrixTransposed()) * (c->getSelectionMatrix() );
-				tmp *= c->getWeight();
-				conMat += tmp;
-			}
-					
-			m_lhsMatrix += conMat;         // (M/h^2) + lambda S.T S
-			m_lhsMatrix.prune(0, 1e-9f);
-			int nnz = m_lhsMatrix.nonZeros();
-			
-			// Factorize lhs matrix
-			StopWatch tmpWatch(10, 10);
-			tmpWatch.startStopWatch();
-			m_linearSolver.analyzePattern(m_lhsMatrix);
-			m_linearSolver.factorize(m_lhsMatrix);
-			tmpWatch.stopStopWatch();
-						
-			std::cout << "Factorization of the system matrix took " << tmpWatch.lastMeasurement() << " microseconds." << std::endl;
-			
-			if (m_linearSolver.info() != Eigen::Success) {   // I think this case should be included inside "else" above!
-			std::cout << "Warning: Factorization denseSolver of LHS matrix for global system was not successful!.. make sure PROJ_DYN_SPARSIFY is set TRUE!" << std::endl;
-			}
-
-		}
-		
-	}
-	// In case constraint sampling / rhs interpolation is not used
-	// we set up the constraint part of the LHS matrix manually here
-	if (!m_rhsInterpolation){
-		std::cout << "Building and factorizing the complete LHS matrix... " << std::endl;   
-		
-		PDSparseMatrix conMat(m_lhsMatrix.rows(), m_lhsMatrix.cols());
-		conMat.setZero();
-		std::vector<Eigen::Triplet<PDScalar>> entries;
-		for (auto& c : m_constraints) {
-			PDSparseMatrixRM& selMat = c->getSelectionMatrix();
-			for (int k = 0; k < selMat.outerSize(); ++k)
-				for (PDSparseMatrixRM::InnerIterator it(selMat, k); it; ++it)
-				{
-					for (PDSparseMatrixRM::InnerIterator it2(selMat, k); it2; ++it2)
-					{
-						entries.push_back(Eigen::Triplet<PDScalar>(it.col(), it2.col(), it.value() * it2.value() * c->getWeight()));
-					}
-				}
-		}
-			
-		conMat.setFromTriplets(entries.begin(), entries.end());
-		
-		if (m_usingSkinSubspaces&& !m_usePosSnapBases) { // Slow case: using position subspaces but no rhs interpolation
-			
-			if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
-				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_pos/";
-				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-				{
-					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
-				}
-			}
-			std::cout << "Simulation case: Skinning subspace for positions and no reduction for constraint projection. VERY SLOW " << std::endl;
-			// (numeriacally unstable) REQUIRES EXTREMELY SMALL TIME STEP for reasonable visual simulations and becomes even SLOWWWWWWER!!" 
-			
-			m_subspaceLHS_inner.setZero(m_baseFunctions.cols(), m_baseFunctions.cols());
-			
-			std::cout << "Constraining it to the subspace..." << std::endl;
-			
-			m_subspaceLHS_inner = m_baseFunctionsTransposed * conMat * m_baseFunctions;
-			m_lhsMatrixSampled = m_subspaceLHS_mom + m_subspaceLHS_inner;
-
-			m_denseSolver.compute(m_lhsMatrixSampled);  // 
-			std::cout << "Size of sampled, dense lhs mat: " << m_lhsMatrixSampled.rows() << ", " << m_lhsMatrixSampled.cols() << std::endl;
-		}		
-		else if (m_usePosSnapBases && !m_usingSkinSubspaces) { // Slow case: using position subspaces but no rhs interpolation
-			
-			if (STORE_FRAMES_OFF) {
-				if (m_usingQDEIMComponents) {
-					if (m_solveDeimLS) {
-						m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_LSDEIM_constraint/";
-
-						std::cout << "Simulation case: POD subspace for positions and DEIM/QDEIM for constraint projection, using Least square" << std::endl;
-					}
-					else {
-						m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_DEIM_constraint/";
-						std::cout << "Simulation case: POD subspace for positions and DEIM/QDEIM for constraint projection" << std::endl;
-					}
-				}
-				else
-				{
-					std::cout << "Simulation case: POD subspace for positions and no reduction for constraint projection" << std::endl;
-					m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_only_pos/";
-				}
-				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-				{
-					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
-				}
-			}
-			m_projectedLHS_inner[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-			m_projectedLHS_inner[1].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-			m_projectedLHS_inner[2].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
-
-			
-			std::cout << "Projecting the LHS matrices to the subspace..." << std::endl;
-			
-			if(isPosSnapBasesOrtho){  //in the orthogonal case: U.T M^-1 Sum lambda S.T S M^-1 U
-				#pragma omp parallel
-				#pragma omp single nowait
-				{
-				#pragma omp task
-					m_projectedLHS_inner[0] = m_basesFunctionsT[0] * conMat * m_basesFunctions[0] * m_massMatrixInv; 
-				#pragma omp task
-					m_projectedLHS_inner[1] = m_basesFunctionsT[1] * conMat * m_basesFunctions[1] * m_massMatrixInv;  
-				#pragma omp task
-					m_projectedLHS_inner[2] = m_basesFunctionsT[2] * conMat * m_basesFunctions[2] * m_massMatrixInv;  	
-				}
-				if (m_projectedLHS_inner[0].hasNaN() || m_projectedLHS_inner[1].hasNaN() || m_projectedLHS_inner[2].hasNaN() ) {
-					std::cout << "Error: projected constraints LHS term orthogonal has NaN values." << std::endl;
-				}
-			}
-			else{	 //in the non-orthogonal case: U.T Sum lambda S.T S U
-				#pragma omp parallel
-				#pragma omp single nowait
-				{
-				#pragma omp task
-					m_projectedLHS_inner[0] = m_basesFunctionsT[0] * conMat * m_basesFunctions[0]; 
-				#pragma omp task
-					m_projectedLHS_inner[1] = m_basesFunctionsT[1] * conMat * m_basesFunctions[1];  
-				#pragma omp task
-					m_projectedLHS_inner[2] = m_basesFunctionsT[2] * conMat * m_basesFunctions[2];  	
-				}
-				if (m_projectedLHS_inner[0].hasNaN() || m_projectedLHS_inner[1].hasNaN() || m_projectedLHS_inner[2].hasNaN() ) {
-					std::cout << "Error: projected constraints LHS term non-orthogonal has NaN values." << std::endl;
-				}
-			}
-			
-			#pragma omp parallel
-			#pragma omp single nowait
-			{
-			#pragma omp task
-
-				m_projectedlhsMatrix[0] =   m_projectedLHS_mom[0] + m_projectedLHS_inner[0] ; 
-			#pragma omp task
-				m_projectedlhsMatrix[1] =   m_projectedLHS_mom[1] + m_projectedLHS_inner[1] ;  
-			#pragma omp task
-				m_projectedlhsMatrix[2] =   m_projectedLHS_mom[2] + m_projectedLHS_inner[2] ; 	
-			}
-			if (m_projectedlhsMatrix[0].hasNaN() || m_projectedlhsMatrix[1].hasNaN() || m_projectedlhsMatrix[2].hasNaN() ) {
-				std::cout << "Error: projected LHS has NaN values." << std::endl;
-			}
-					
-			#pragma omp parallel
-			#pragma omp single nowait
-			{
-			#pragma omp task
-				m_denseXSolver.compute(m_projectedlhsMatrix[0]);  
-			#pragma omp task
-				m_denseYSolver.compute(m_projectedlhsMatrix[1]);  
-			#pragma omp task
-				m_denseZSolver.compute(m_projectedlhsMatrix[2]);  	
-			} 
-			if (m_denseXSolver.info() != Eigen::Success || m_denseYSolver.info() != Eigen::Success || m_denseZSolver.info() != Eigen::Success) {   
-			std::cout << "Warning: Factorization denseSolver X/Y/Z of LHS matrix for global system was not successful!.." << std::endl;
-			}	
-		}
-		else { // Full simulation: here neither position space nor constraint projection reduction ===> no reduction at all!!
-			if (STORE_FRAMES_OFF) {
-				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "FOM/";
-				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
-				{
-					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
-				}
-			}
-			std::cout << "Simulation case: No REDUCTION: we run FullSpace positions and FullSpace constraint projection" << std::endl;
-
-			m_lhsMatrix += conMat;
-			m_lhsMatrix.prune(0, 1e-9f);
-			int nnz = m_lhsMatrix.nonZeros();
-			
-			// Factorize lhs matrix
-			StopWatch tmpWatch(10, 10);
-			tmpWatch.startStopWatch();
-			m_linearSolver.analyzePattern(m_lhsMatrix);
-			m_linearSolver.factorize(m_lhsMatrix);
-			tmpWatch.stopStopWatch();
-						
-			std::cout << "Factorization of the system matrix took " << tmpWatch.lastMeasurement() << " microseconds." << std::endl;
-			
-			if (m_linearSolver.info() != Eigen::Success) {   // I think this case should be included inside "else" above!
-			std::cout << "Warning: Factorization denseSolver of LHS matrix for global system was not successful!.. make sure PROJ_DYN_SPARSIFY is set TRUE!" << std::endl;
-			}
-		}
-		
-		
-		// After the lhs has been constructed, if flat bending is desired,
-		// the bending constraints can now be thrown away! (?)
-		if (m_flatBending) {
-			for (ProjDynConstraint* c : m_bendingConstraints) {
-				auto const& bc = std::find(m_constraints.begin(), m_constraints.end(), c);
-				if (bc != m_constraints.end()) {
-					m_constraints.erase(bc);
-				}
-			}
-		}
-	}
-	
-	
-	m_recomputeFactorization = false;
-
-	// Now, all sampled constraints should have been added and the used vertices can be updated,
-	// and the constraints can be updated to use this list
-	
-	/* note: rhsInterpolation uses a subset of the vertices used by skinning subspaces:
-	--> Therefore, in case rhsInterpolation we just updateUsedVertices,
-	   		in case m_usingSkinSubspaces we need to add the rest of the vertices from m_samples then updateUsedVertices,
-	   		while, otherwise in case of full simulations or POD subspaces we need all verties.
-	   		TODO: consider a list of vertices when using splocs zum beispiel!
-	*/
-	if (m_rhsInterpolation && m_usingSkinSubspaces && !m_usePosSnapBases) {
-		//std::cout << "Determining used vertices..." << std::endl;
-		updateUsedVertices();
-	}
-	else if (m_usingSkinSubspaces && !m_usePosSnapBases) {
-		for (unsigned int v : m_samples) {
-			m_additionalUsedVertices.push_back(v);
-		}
-		updateUsedVertices();
-	}
-	else if (m_rhsInterpolation && m_usePosSnapBases){
-		
-		for (unsigned int v : m_constraintVertexSamples) { // here we use only constraint samples
-			m_additionalUsedVertices.push_back(v);
-		}
-		/*
-		for (unsigned int v = 0; v < m_numVertices; v++) {
-			m_additionalUsedVertices.push_back(v);
-		}*/
-		updateUsedVertices();
-		
-	}
-	else{                                              
-		m_usedVertices.clear();
-		for (unsigned int v = 0; v < m_numVertices; v++) {
-			m_usedVertices.push_back(v);
-		}
-	}
-	//std::cout <<m_usedVertices.size() << std::endl;
-	
-	// Optional sparsification of matrices
-	if (m_usingPosSubspaces && m_useSparseMatricesForSubspace) {
-		//std::cout << "PROJ_DYN_SPARSIFY is set TRUE.. Sparsifying the LHS complete matrix..." << std::endl;
-		
-		if(m_usingSkinSubspaces && !m_usePosSnapBases){
-			PDSparseMatrix lhsMatrixSampledSparse = m_lhsMatrixSampled.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
-			m_subspaceSystemSolverSparse.compute(lhsMatrixSampledSparse);
-			if (m_subspaceSystemSolverSparse.info() != Eigen::Success) {
-				std::cout << "Warning: Factorization of the sparse LHS matrix for the global step was not successful!" << std::endl;
-				PDSparseMatrix eps(lhsMatrixSampledSparse.rows(), lhsMatrixSampledSparse.rows());
-				eps.setIdentity();
-				eps *= 1e-12;
-				while (m_subspaceSystemSolverSparse.info() != Eigen::Success && eps.coeff(0, 0) < 1e-10) {
-					std::cout << "Adding small diagonal entries (" << eps.coeff(0, 0) << ")..." << std::endl;
-					lhsMatrixSampledSparse += eps;
-					eps *= 2;
-					m_subspaceSystemSolverSparse.compute(eps);
-				}
-			}
-			else{
-				std::cout << "Factorization of the sparse LHS matrix for the global step was successful!" << std::endl;
-			}
-			m_rhsFirstTermMatrixSparse = m_rhsFirstTermMatrix.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
-			updateParallelVUpdateBlocks();
-		
-		}
-	
-		if(m_usePosSnapBases && !m_usingSkinSubspaces){
-			PDSparseMatrix lhsXMatrixSampledSparse = m_projectedlhsMatrix[0].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
-			PDSparseMatrix lhsYMatrixSampledSparse = m_projectedlhsMatrix[1].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
-			PDSparseMatrix lhsZMatrixSampledSparse = m_projectedlhsMatrix[2].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
-					
-			#pragma omp parallel
-			#pragma omp single nowait
-			{
-			#pragma omp task
-				m_subspaceXSystemSolverSparse.compute(m_projectedlhsMatrixSparse[0]);
-			#pragma omp task
-				m_subspaceYSystemSolverSparse.compute(lhsYMatrixSampledSparse);
-			#pragma omp task
-				m_subspaceZSystemSolverSparse.compute(lhsZMatrixSampledSparse);
-			}
-			
-			if (m_subspaceXSystemSolverSparse.info() != Eigen::Success) {
-				std::cout << "Warning: Factorization of the sparse X LHS matrix for the global step was not successful!" << std::endl;
-				PDSparseMatrix eps(m_projectedlhsMatrixSparse[0].rows(), m_projectedlhsMatrixSparse[0].rows());
-				eps.setIdentity();
-				eps *= 1e-12;
-				while (m_subspaceXSystemSolverSparse.info() != Eigen::Success && eps.coeff(0, 0) < 1e-10) {
-					std::cout << "Adding small diagonal entries (" << eps.coeff(0, 0) << ")..." << std::endl;
-					m_projectedlhsMatrixSparse[0] += eps;
-					eps *= 2;
-					m_subspaceXSystemSolverSparse.compute(m_projectedlhsMatrixSparse[0]);
-				}
-			}
-			else if (m_subspaceYSystemSolverSparse.info() != Eigen::Success) {
-				std::cout << "Warning: Factorization of the sparse Y LHS matrix for the global step was not successful!" << std::endl;
-				PDSparseMatrix eps(lhsYMatrixSampledSparse.rows(), lhsYMatrixSampledSparse.rows());
-				eps.setIdentity();
-				eps *= 1e-12;
-				while (m_subspaceYSystemSolverSparse.info() != Eigen::Success && eps.coeff(0, 0) < 1e-10) {
-					std::cout << "Adding small diagonal entries (" << eps.coeff(0, 0) << ")..." << std::endl;
-					lhsYMatrixSampledSparse += eps;
-					eps *= 2;
-					m_subspaceYSystemSolverSparse.compute(lhsYMatrixSampledSparse);
-				}
-			}
-			else if (m_subspaceZSystemSolverSparse.info() != Eigen::Success) {
-				std::cout << "Warning: Factorization of the sparse Z LHS matrix for the global step was not successful!" << std::endl;
-				PDSparseMatrix eps(lhsZMatrixSampledSparse.rows(), lhsZMatrixSampledSparse.rows());
-				eps.setIdentity();
-				eps *= 1e-12;
-				while (m_subspaceZSystemSolverSparse.info() != Eigen::Success && eps.coeff(0, 0) < 1e-10) {
-					std::cout << "Adding small diagonal entries (" << eps.coeff(0, 0) << ")..." << std::endl;
-					lhsZMatrixSampledSparse += eps;
-					eps *= 2;
-					m_subspaceZSystemSolverSparse.compute(lhsZMatrixSampledSparse);
-				}
-			
-			}			
-			else{
-				std::cout << "Factorization of the sparse LHS matrix for the global step was successful!" << std::endl;
-			}
-			m_projectedRHS_momSparse[0] = m_projectedRHS_mom[0].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);  // Only momentum term of RHS
-			m_projectedRHS_momSparse[1] = m_projectedRHS_mom[1].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
-			m_projectedRHS_momSparse[2] = m_projectedRHS_mom[2].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
-			std::cout << "First RHS term has been also sparsified.." << std::endl;
-			//updateParallelVUpdateBlocks();/// TODO :make sure this update is aware of the pod case first before using it
-		
-		}
-		
-	}
-	
-	m_collidedVerts = new bool[m_numVertices];
-	
-	for (int i = 0; i < m_numVertices; i++) m_collidedVerts[i] = false;
-
-	m_isSetup = true;
-	m_collisionCorrection = false;
-	//m_planeBounceCorrection = false;
-	m_grippedVertices.clear();
-
-	m_initialPos = m_positions;
-	m_initialPosSub = m_positionsSubspace;
-
-	// Precompute the weighted external forces that will appear on the rhs
-	recomputeWeightedForces();
-
-	m_precomputationStopWatch.stopStopWatch();
-	
-	
-
-	if(m_usingQDEIMComponents && !m_solveDeimLS){	// TODO: parallelize!
-
-		/*
-		UTSTx.resize(usedConstraints->size()), UTSTy.resize(usedConstraints->size()), UTSTz.resize(usedConstraints->size());
-		for (int ind = 0; ind < usedConstraints->size(); ind++) {  // usedConstraints->size() = numConstraints * ConstraintsSize ==e*p
-			
-			PDSparseMatrix ST;    // selection.T matrices
-			ST = usedConstraints->at(ind)->getSelectionMatrixTransposed();   // (numVertices, p)
-			
-			// e-times
-			UTSTx[ind] = basesFunctionsTSparse[0] * ST;    // each size (r_pod , p)
-			UTSTy[ind] = basesFunctionsTSparse[1] * ST;
-			UTSTz[ind] = basesFunctionsTSparse[2] * ST;
-			
-			//std::cout << ST.innerSize() << " " << ST.outerSize()<< " " << usedConstraints->size() << std::endl;
-		
-			p_constaintSize = ST.outerSize();
-			
-		}
-		
-		*/
-		int p = 1;   // constraint size
-		if (m_TetStrainOnly) {
-			p = 3;
-		}
-		std::cout << "Preparing QDEIM RHS matrices ...";
-		UTSTMx.setZero(m_numPosPODModes+1, deimBasisCols), UTSTMy.setZero(m_numPosPODModes+1, deimBasisCols), UTSTMz.setZero(m_numPosPODModes+1, deimBasisCols);
-		STMx.setZero(m_numVertices, deimBasisCols), STMy.setZero(m_numVertices, deimBasisCols), STMz.setZero(m_numVertices, deimBasisCols);
-		for(int ind = 0; ind < usedConstraints->size(); ind++){
-			//int p = p_constaintSize;
-			PDMatrix bx, by, bz; 
-			bx = m_xMqdeim.block(ind* p , 0, p, deimBasisCols);  // (p, deimBasisCols) // TODO: sparcify M (?)
-			by = m_yMqdeim.block(ind* p , 0, p, deimBasisCols);
-			bz = m_zMqdeim.block(ind* p , 0, p, deimBasisCols);
-			
-			PDSparseMatrix ST_ind = usedConstraints->at(ind)->getSelectionMatrixTransposed();   // (numVertices, p)
-			PDScalar weight_ind = usedConstraints->at(ind)->getWeight();
-			for (int k=0; k < deimBasisCols; k++){
-				/*
-				fastDensePlusSparseTimesDenseMat(UTSTMx, UTSTx[ind] , bx, k);  // size (r_pod , kp) dense matrix
-				fastDensePlusSparseTimesDenseMat(UTSTMy, UTSTy[ind] , by, k);
-				fastDensePlusSparseTimesDenseMat(UTSTMz, UTSTz[ind] , bz, k); 
-
-				*/
-				
-				fastDensePlusSparseTimesDenseMat(STMx, ST_ind, bx, k, weight_ind); // (n, deimBasisCols)
-				fastDensePlusSparseTimesDenseMat(STMy, ST_ind, by, k, weight_ind); 
-				fastDensePlusSparseTimesDenseMat(STMz, ST_ind, bz, k, weight_ind); 
-			}
-		}
-
-		UTSTMx = m_basesFunctionsTSparse[0] * STMx ;    // (r_pod, deimBasisCols)
-		UTSTMy = m_basesFunctionsTSparse[1] * STMy ;
-		UTSTMz = m_basesFunctionsTSparse[2] * STMz ;
-
-		std::cout << " done." << std::endl;
-	}	
-				
-#ifndef EIGEN_DONT_PARALLELIZE
-	Eigen::setNbThreads(PROJ_DYN_EIGEN_NUM_THREADS);
-#endif
-//std::cout << m_velocitiesSubspace << std::endl;
-}
 
 void ProjDynSimulator::fullPosSetup() {
 
@@ -3688,7 +2525,6 @@ void ProjDynSimulator::snapBasesPosSetup() {
 	std::cout << "First RHS term has been also sparsified.." << std::endl;
 	}
 } // end of pre-computations for position snapBases reduction
-
 
 void ProjDynSimulator::lbsConstarintsSetup() {
 
@@ -4554,6 +3390,7 @@ void ProjDynSimulator::snapBasesPos_verticesFullUpdate(PDPositions& s) {
 	}
 	
 }
+
 void ProjDynSimulator::projectUsedVerticesToSnapBasesSubspace() {
 
 	// Project full velocities back to subspace via interpolation of the velocities on used vertices
@@ -4582,6 +3419,7 @@ void ProjDynSimulator::projectUsedVerticesToSnapBasesSubspace() {
 		}
 	}
 }
+
 void ProjDynSimulator::projectUsedVerticesToLBSSubspace() {
 	// Project used velocities back to subspace via interpolation of the velocities on used vertices
 	PROJ_DYN_PARALLEL_FOR
@@ -4595,6 +3433,7 @@ void ProjDynSimulator::projectUsedVerticesToLBSSubspace() {
 		}
 
 }
+
 void ProjDynSimulator::handelTangentialMovementAndRepilsion_allVertices() {
 	PROJ_DYN_PARALLEL_FOR
 		for (int v = 0; v < m_numVertices; v++) {
@@ -4606,6 +3445,7 @@ void ProjDynSimulator::handelTangentialMovementAndRepilsion_allVertices() {
 			}
 		}
 }
+
 void ProjDynSimulator::handelTangentialMovementAndRepilsion_usedVertices() {
 
 	// Remove tangential movement and add repulsion movement from collided vertices
@@ -4621,6 +3461,1150 @@ void ProjDynSimulator::handelTangentialMovementAndRepilsion_usedVertices() {
 
 }
 
+
+
+
+void ProjDynSimulator::setup() {
+
+	// we come here directly after printing mesh statistics
+	std::cout << "Setting simulation..." << std::endl;
+	//std::cout << m_positions << std::endl;  //  same initial m_positions for all
+
+#ifndef EIGEN_DONT_PARALLELIZE
+	Eigen::setNbThreads(PROJ_DYN_NUM_THREADS);
+#endif 
+
+	m_precomputationStopWatch.startStopWatch();
+
+	m_positionCorrections.setZero(m_positions.rows(), 3);
+
+	/* First, in case we use subspaces to reduce position, we create or load position subspace basis functions */
+	if (m_usingPosSubspaces) {
+		//bool loadSuccess = false;
+		if (m_usingSkinSubspaces && !m_usePosSnapBases) {
+			std::cout << "Creating subspaces..." << std::endl;
+			createPositionSubspace(m_numSamplesPosSubspace, true, false); // pick wich true/false: do we useSkinningSpace? or usingPODPosSubSpace?
+			finalizeBaseFunctions();
+		}
+		else if (m_usePosSnapBases && !m_usingSkinSubspaces) {
+			std::cout << "Loading subspaces..." << std::endl;
+			if (m_usingPODPosSubspaces) {
+				createPositionSubspace(m_numPosPODModes, false, true);  // here we choose usingPODPosSubSpace
+				std::cout << "POD subspaces have been loaded..." << std::endl;
+			}
+			else if (m_usingSPLOCSPosSubspaces)
+			{
+				createPositionSubspace(m_numPosSPLOCSModes, false, true);  // here we choose usingPODPosSubSpace
+				std::cout << "SPLOCS subspaces have been loaded..." << std::endl;
+			}
+
+			// In the POD case, different handling of basis are required, 
+			// we decople the (X, Y, Z) dimensions and use three matrices so that we solve in parallel for each
+			// slicing m_baseFunctions to m_basesFunctions[0], m_basesFunctions[1] and m_basesFunctions[1] 
+			// m_numPosPODModes+1: because we add the original mesh as a component too
+			m_basesFunctions.resize(3);
+			m_basesFunctionsT.resize(3);
+
+			m_basesFunctionsSparse.resize(3);
+			m_basesFunctionsTSparse.resize(3);
+
+
+			m_basesFunctions[0].setZero(m_snapshotsBasesTmp.rows(), m_numPosPODModes + 1);
+			m_basesFunctions[1].setZero(m_snapshotsBasesTmp.rows(), m_numPosPODModes + 1);
+			m_basesFunctions[2].setZero(m_snapshotsBasesTmp.rows(), m_numPosPODModes + 1);
+
+
+			if (3 * m_numPosPODModes != m_snapshotsBasesTmp.cols()) {
+				std::cout << "Sizes are not matching... we have " << m_snapshotsBasesTmp.cols() << " columns and 3*m_numPosPODModes = " << 3 * m_numPosPODModes << std::endl;
+			}
+
+
+			//PROJ_DYN_PARALLEL_FOR
+			for (int k = 0; k < m_numPosPODModes; k++) {
+				//std::cout << normFactor << std::endl;
+				for (int v = 0; v < m_numVertices; v++) {
+					// using different signs for the basis rotates the fist frame!
+					m_basesFunctions[0](v, k) = m_snapshotsBasesTmp(v, k);
+					m_basesFunctions[1](v, k) = m_snapshotsBasesTmp(v, m_numPosPODModes + k);
+					m_basesFunctions[2](v, k) = m_snapshotsBasesTmp(v, 2 * m_numPosPODModes + k);
+				}
+			}
+			// add the original mesh as the component
+			for (int v = 0; v < m_numVertices; v++) {
+				m_basesFunctions[0](v, m_numPosPODModes) = m_positions(v, 0);
+				m_basesFunctions[1](v, m_numPosPODModes) = m_positions(v, 1);
+				m_basesFunctions[2](v, m_numPosPODModes) = m_positions(v, 2);
+			}
+
+
+			if (m_basesFunctions[0].hasNaN() || m_basesFunctions[1].hasNaN() || m_basesFunctions[2].hasNaN()) {
+				std::cout << "Error: NaN entries in POD basis matrixies" << std::endl;
+			}
+
+			finalizeSnapBasesFunctions();   // this function does finalize the three matrices
+		}
+
+		// Sparse subspace basis needs to be available before the snapshot groups get initialized
+		if (m_useSparseMatricesForSubspace) {
+			std::cout << "Sparsifing POD base matrcies... " << std::endl;
+			if (m_usingSkinSubspaces && !m_usePosSnapBases) {
+				// case Skinning subspaces
+				m_baseFunctionsSparse = m_baseFunctions.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+				m_baseFunctionsTransposedSparse = m_baseFunctionsTransposed.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+			}
+			if (m_usePosSnapBases && !m_usingSkinSubspaces) {
+				// case POD subspaces
+
+				m_basesFunctionsSparse[0] = m_basesFunctions[0].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+				m_basesFunctionsTSparse[0] = m_basesFunctionsT[0].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+
+				m_basesFunctionsSparse[1] = m_basesFunctions[1].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+				m_basesFunctionsTSparse[1] = m_basesFunctionsT[1].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+
+				m_basesFunctionsSparse[2] = m_basesFunctions[2].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+				m_basesFunctionsTSparse[2] = m_basesFunctionsT[2].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+			}
+		}
+		/*
+		if(m_usingQDEIMComponents){
+
+			// load and prepare the M and S mats to do nonlinear reduction
+			loadQDEIMnonlinearSubspace(m_numQDEIMModes, m_usingSkinSubspaces, m_usingPODPosSubspaces, m_rhsInterpolation);
+			int constSize = 0;
+			int p = 1;
+			if (m_TetStrainOnly) {
+				p = 3;
+				constSize = 3;
+				}
+
+
+			if(m_solveDeimLS){
+				deimBasisCols = m_numQDEIMModes;
+			}
+			else{
+				deimBasisCols = m_numQDEIMModes * p;
+			}
+
+			//m_Mqdeim = V (P^T V)^{-1}
+			m_xMqdeim.setZero(tempMqdeim.rows(), deimBasisCols);
+			m_yMqdeim.setZero(tempMqdeim.rows(), deimBasisCols);
+			m_zMqdeim.setZero(tempMqdeim.rows(), deimBasisCols);
+
+
+			m_SqdeimX.resize(m_numQDEIMModes);
+			m_SqdeimY.resize(m_numQDEIMModes);
+			m_SqdeimZ.resize(m_numQDEIMModes);
+
+			if (3*deimBasisCols == tempMqdeim.cols() && m_numQDEIMModes == tempSqdeim.rows()){
+
+			//PROJ_DYN_PARALLEL_FOR
+				for (int k = 0; k < deimBasisCols; k++){
+					//std::cout << k << std::endl;
+					for(int v = 0 ; v < tempMqdeim.rows() ; v++){
+						// filling only the required number of modes from the loded binary
+						m_xMqdeim(v, k) = tempMqdeim(v, k);
+						m_yMqdeim(v, k) = tempMqdeim(v, deimBasisCols + k);
+						m_zMqdeim(v, k) = tempMqdeim(v, 2*deimBasisCols + k);
+					}
+				}
+
+
+				m_Mqdeim.resize(3);
+				m_Mqdeim[0] = m_xMqdeim;
+				m_Mqdeim[1] = m_yMqdeim;
+				m_Mqdeim[2] = m_zMqdeim;
+
+				if(tempSqdeim.cols()==3){
+					//PROJ_DYN_PARALLEL_FOR
+						// just for the names of the matrices to be consistent but this step is not necessary
+						for (int k = 0; k < m_numQDEIMModes; k++){
+							m_SqdeimX[k] = tempSqdeim(k, 0);
+							m_SqdeimY[k] = tempSqdeim(k, 1);
+							m_SqdeimZ[k] = tempSqdeim(k, 2);
+						}
+					m_Sqdeim.resize(3);
+					m_Sqdeim[0] = m_SqdeimX;
+					m_Sqdeim[1] = m_SqdeimY;
+					m_Sqdeim[2] = m_SqdeimZ;
+				}
+				else{
+					std::cout << "Fatal error! in Qdeim selection mat dimension" << std::endl;
+					return;
+				}
+
+					std::cout << "QDEIM nonlinear subspaces have been loaded..." << std::endl;
+
+			}
+			else{
+				std::cout << "FATAL ERROR!  in QDEIM matrices dimension" << std::endl;
+				return;
+			}
+
+			m_xMqdeimSparse = m_xMqdeim.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+			m_yMqdeimSparse = m_yMqdeim.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+			m_zMqdeimSparse = m_zMqdeim.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);
+
+		} */
+	} // End of basis loading 
+
+	/*  Second, if using subspaces, after finalizing the basis function (basis and basis.T ready!), we set up projection of full positions into the subspace.
+	Initial subspace positions/velocities will be computed from full positions/velocities. */
+
+	if (m_usingPosSubspaces) {
+		if (m_usingSkinSubspaces && !m_usePosSnapBases) {
+			std::cout << "Projecting positions, velocities and forces into the Skinning subspace... " << std::endl;
+			// We need to project the current positions to the subspace, which will be
+			// done by solving a  least squares problem since the subspace is not assumed
+			// to be orthonormal.
+			PDMatrix L = m_baseFunctionsTransposed * m_massMatrix * m_baseFunctions;
+			m_subspaceSolver.compute(L);
+
+			m_positionsSubspace.setZero(m_baseFunctions.cols(), 3);
+			m_velocitiesSubspace.setZero(m_baseFunctions.cols(), 3);
+
+			projectToSubspace(m_positionsSubspace, m_positions, false);
+			projectToSubspace(m_velocitiesSubspace, m_velocities, false);
+
+			m_positions = m_baseFunctions * m_positionsSubspace;
+			m_velocities = m_baseFunctions * m_velocitiesSubspace;
+		}
+		else if (m_usePosSnapBases && !m_usingSkinSubspaces) {
+
+			std::cout << "Prepapring subSpcaces and POD Subspaces solvers.... " << std::endl;
+			// TODO: We need to project the current positions to the subspace, which can be done through matrix-vector product 
+			// because in this case matrices are assumed to be orthonormal.
+			std::vector<PDMatrix> m_basesFunctionsSquared;
+			m_basesFunctionsSquared.resize(3);
+			if (!isPosSnapBasesOrtho) {
+				m_basesFunctionsSquared[0] = m_basesFunctionsT[0] * m_massMatrix * m_basesFunctions[0];
+				m_basesFunctionsSquared[1] = m_basesFunctionsT[1] * m_massMatrix * m_basesFunctions[1];
+				m_basesFunctionsSquared[2] = m_basesFunctionsT[2] * m_massMatrix * m_basesFunctions[2];
+
+#pragma omp parallel
+#pragma omp single nowait
+				{
+#pragma omp task
+					m_subspaceXSolver.compute(m_basesFunctionsSquared[0]);
+#pragma omp task
+					m_subspaceYSolver.compute(m_basesFunctionsSquared[1]);
+#pragma omp task
+					m_subspaceZSolver.compute(m_basesFunctionsSquared[2]);
+				}
+
+				if (m_subspaceXSolver.info() != Eigen::Success || m_subspaceYSolver.info() != Eigen::Success || m_subspaceZSolver.info() != Eigen::Success) {
+					// solving failed
+					std::cout << "FATAL ERROR! subspaceSolvers for nonOrthogonal basis failed" << std::endl;
+					return;
+				}
+				if (m_useSparseMatricesForSubspace) {
+					PDSparseMatrix m_baseXFunctionsSquaredSparse, m_baseYFunctionsSquaredSparse, m_baseZFunctionsSquaredSparse;
+					m_baseXFunctionsSquaredSparse = m_basesFunctionsTSparse[0] * m_massMatrix * m_basesFunctionsSparse[0];
+					m_baseYFunctionsSquaredSparse = m_basesFunctionsTSparse[1] * m_massMatrix * m_basesFunctionsSparse[1];
+					m_baseZFunctionsSquaredSparse = m_basesFunctionsTSparse[2] * m_massMatrix * m_basesFunctionsSparse[2];
+
+
+#pragma omp parallel
+#pragma omp single nowait
+					{
+#pragma omp task
+						m_subspaceXSparseSolver.compute(m_baseXFunctionsSquaredSparse);
+#pragma omp task
+						m_subspaceYSparseSolver.compute(m_baseYFunctionsSquaredSparse);
+#pragma omp task
+						m_subspaceZSparseSolver.compute(m_baseZFunctionsSquaredSparse);
+					}
+				}
+			}
+
+			m_positionsSubspace.setZero(m_basesFunctions[0].cols(), 3);
+			m_velocitiesSubspace.setZero(m_basesFunctions[0].cols(), 3);
+
+			std::cout << "Projecting positions, velocities and forces into the POD subspace... " << std::endl;
+
+			if (m_useSparseMatricesForSubspace) {
+				projectToSparsePODSubspace(m_positionsSubspace, m_positions, isPosSnapBasesOrtho);
+				projectToSparsePODSubspace(m_velocitiesSubspace, m_velocities, isPosSnapBasesOrtho);
+			}
+			else {
+				// inialize subPos and subVeloceties from the fullPos and fullVeloceties
+				projectToPODSubspace(m_positionsSubspace, m_positions, isPosSnapBasesOrtho);
+				projectToPODSubspace(m_velocitiesSubspace, m_velocities, isPosSnapBasesOrtho);
+			}
+
+			// Full = Basis * reduced: I do not think we need to do this with POD basis again, full positions is already the initial positions, or?
+			//std::cout << "Updating full positions, velocities ... " << std::endl;
+
+			//std::cout << "Update ready... " << std::endl;
+		}
+
+	}
+
+
+	// Collect constraints for building global system and interpolation subspaces for rhs interpolation
+	// (if no rhs interpolation is used, we simply collect all constraints, otherwise we only
+	// use constraints from the main group and treat the rest as additional constraints) (?)
+
+	/* the "m_constraints" are the ones added in main.cpp after the simulator has been initiated
+	   example: sim->addTetStrain(0.00051, 1.f, 1.f); (in main.cpp) */
+	std::vector< ProjDynConstraint* >* usedConstraints = &m_constraints;
+	std::vector< ProjDynConstraint* > collectedConstraints;
+
+
+	if (m_rhsInterpolation || (m_usingQDEIMComponents && m_solveDeimLS)) {  // TODO: This case (m_usingQDEIMComponents && m_solveDeimLS) not yet tested.
+		std::cout << "Collecting constraints for interpolation..." << std::endl;
+		collectedConstraints.clear();
+		for (ProjDynConstraint* c : m_bendingConstraints) {
+			collectedConstraints.push_back(c);
+		}
+
+		for (ProjDynConstraint* c : m_strainConstraints) {
+			collectedConstraints.push_back(c);
+		}
+
+		for (ProjDynConstraint* c : m_collisionConstraints) {
+			collectedConstraints.push_back(c);
+		}
+
+		for (ProjDynConstraint* c : m_tetStrainConstraints) {
+			collectedConstraints.push_back(c);
+		}
+
+		for (ProjDynConstraint* c : m_additionalConstraints) {
+			collectedConstraints.push_back(c);
+		}
+
+		usedConstraints = &collectedConstraints;
+
+		// Here we create a preliminary sampling of elements which are used
+		// to choose which constraints should be evaluated.
+		// These will be overwritten if constraint groups are used
+		// that suggest DEIM samples.
+		std::cout << "Sampling constraints...";
+		if (m_rhsInterpolation) {
+			createConstraintSampling(m_numConstraintSamples);
+		}
+		else {
+
+			createQDEIMConstraintTetStrainSampling();
+
+		}
+
+		//std::cout << " DONE! " << std::endl;
+	}
+
+
+
+	// If using r.h.s. interpolation, build interpolation subspaces
+	// and constraint sampling for each group.
+	// The LHS matrix will also be built from these constraint interpolation groups.
+
+	// Set up interpolation groups and adapt the lhs side matrix for using them
+	if (m_rhsInterpolation || (m_usingQDEIMComponents && m_solveDeimLS)) {
+		std::cout << "Initiating snapshot groups for constraints ... " << std::endl;
+		m_snapshotGroups.clear();
+		// RHSInterpolationGroup initializes the full set of constraints 
+		if (!m_springConstraints.empty()) {
+			m_snapshotGroups.push_back(RHSInterpolationGroup("spring", m_springConstraints, m_positions,
+				m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
+		}
+		if (!m_bendingConstraints.empty() && !m_flatBending) {
+			m_snapshotGroups.push_back(RHSInterpolationGroup("bend", m_bendingConstraints, m_positions,
+				m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
+		}
+		if (!m_strainConstraints.empty()) {
+			m_snapshotGroups.push_back(RHSInterpolationGroup("strain", m_strainConstraints, m_positions,
+				m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
+		}
+		if (!m_tetStrainConstraints.empty()) {
+			m_snapshotGroups.push_back(RHSInterpolationGroup("tetstrain", m_tetStrainConstraints, m_positions,
+				m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
+		}
+		if (!m_tetExConstraints.empty()) {
+			m_snapshotGroups.push_back(RHSInterpolationGroup("tetex", m_tetExConstraints, m_positions,
+				m_vertexMasses, m_triangles, m_tetrahedrons, m_rhsRegularizationWeight));
+		}
+
+		// If snapshot groups are used they need to be initialized
+		if (m_rhsInterpolation) {
+			for (auto& g : m_snapshotGroups) {
+				// Initialization of the group depends on the constraint that's being used
+				// initialize the reduced constraints projection for each group
+				if (g.getName() == "bend") {
+					initRHSInterpolGroup(g, m_constraintVertexSamples); //, hessian);
+				}
+				else if (g.getName() == "spring") {
+					initRHSInterpolGroup(g, m_constraintVertexSamples); //, hessian);
+				}
+				else if (g.getName() == "strain") {
+					initRHSInterpolGroup(g, m_constraintTriSamples); //, hessian);
+				}
+				else if (g.getName() == "tetstrain" || g.getName() == "tetex") {
+					initRHSInterpolGroup(g, m_constraintTetSamples); //, hessian);
+				}
+				else {
+					std::cout << "ERROR: unknown rhs interpolation group: " << g.getName() << "!" << std::endl;
+				}
+
+				// Maintain list of constraints that have been sampled
+				std::vector<ProjDynConstraint*>& sampledCons = g.getSampledConstraints();
+				for (ProjDynConstraint* c : sampledCons) m_sampledConstraints.push_back(c);
+
+
+			}
+
+			std::cout << " LBS Snapshot groups for constraints has been initialized!" << std::endl;
+
+		}
+		else {  // if(m_usingQDEIMComponents && m_solveDeimLS)
+			for (auto& g : m_snapshotGroups) {
+				// Initialization of the group depends on the constraint that's being used
+				// initialize the reduced constraints projection for each group
+
+				if (g.getName() == "tetstrain" || g.getName() == "tetex") {
+
+					//for (int m: m_constraintTetSamples) std::cout << m <<std::endl;
+					initQDEIMRHSInterpolGroup(g, m_constraintTetSamples, m_Mqdeim);
+
+
+				}
+				else {
+					std::cout << "QDEIM Snapshot groups are not ready for this group!" << g.getName() << std::endl;
+				}
+				/*
+				// TODO: currently QDEIM is implemented only for tet strains, we need to do the rest of the constarints groups
+				else if (g.getName() == "spring") {
+					initQDEIMRHSInterpolGroup(g, m_constraintVertexSamples); //, hessian);
+				}
+				else if (g.getName() == "strain") {
+					initQDEIMRHSInterpolGroup(g, m_constraintTriSamples); //, hessian);
+				}
+				else if (g.getName() == "bend") {
+					initQDEIMRHSInterpolGroup(g, m_constraintVertexSamples); //, hessian);
+				}
+				else {
+					std::cout << "ERROR: unknown rhs interpolation group: " << g.getName() << "!" << std::endl;
+				} */
+
+				// Maintain list of constraints that have been sampled
+				std::vector<ProjDynConstraint*>& sampledCons = g.getSampledConstraints();
+
+				for (ProjDynConstraint* c : sampledCons) m_sampledConstraints.push_back(c);
+			}
+
+			std::cout << " QDEIM Snapshot groups for constraints has been initialized!" << std::endl;
+		}
+	}
+
+	/* Initialize the LHS and RHS matrices for the global system: */
+
+	// 1) Compute the momentum part of the lhs and rhs matrices of the global step
+	// in case no position space reduction, or we run full simulation, the solver uses these terms (no projection required)
+	std::cout << "Initiating momentum term of LHS and RHS matrices ..." << std::endl;
+	m_lhsMatrix = m_massMatrix;
+	m_lhsMatrix *= 1.f / (m_timeStep * m_timeStep);
+	m_rhsMasses.setZero(m_numVertices);
+	for (int v = 0; v < m_numVertices; v++) {
+		m_rhsMasses(v) = m_vertexMasses(v) / (m_timeStep * m_timeStep);
+	}
+
+	/* And, if we use position spaces reduction, we project the momentum terms in bothe RHS and RHL to low dim subspaces*/
+
+	if (m_usingSkinSubspaces && !m_usePosSnapBases) {
+		std::cout << "Projecting the momentum term RHS to skinning subspaces, for the global system ..." << std::endl;
+		m_rhsFirstTermMatrixPre = m_baseFunctionsTransposed * m_massMatrix * m_baseFunctions;
+		m_rhsFirstTermMatrix = m_rhsFirstTermMatrixPre * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)
+		rhs2.setZero(m_baseFunctions.cols(), 3);
+
+		std::cout << "Projecting the momentum term LHS to skinning subspaces, for the global system ..." << std::endl;
+		// Momentum term
+		m_subspaceLHS_mom = m_baseFunctionsTransposed * m_lhsMatrix * m_baseFunctions;       // * (m_timeStep * m_timeStep);
+		PDMatrix eps(m_subspaceLHS_mom.rows(), m_subspaceLHS_mom.rows());
+		eps.setIdentity();
+		eps *= 1e-10;
+		m_subspaceLHS_mom += eps;   // m_subspaceLHS_mom = (U.T M U / h^2)
+
+	}
+	else if (m_usePosSnapBases && !m_usingSkinSubspaces) {
+		m_projectedLHS_mom.resize(3);
+		m_projectedLHS_inner.resize(3);
+		m_projectedRHS_mom.resize(3);
+		m_projectedRHS_mom_pre.resize(3);
+		m_projectedlhsMatrix.resize(3);
+		m_projectedlhsMatrixSparse.resize(3);
+		m_projectedRHS_momSparse.resize(3);
+		m_projectedRHS_mom_preSparse.resize(3);
+
+
+
+		std::cout << "Projecting the momentum term RHS matrices to POD subspaces, for the global system ..." << std::endl;
+
+		if (isPosSnapBasesOrtho) {  //in the orthogonal case: U.T M U = Identity
+			m_projectedRHS_mom_pre[0].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			m_projectedRHS_mom_pre[1].setIdentity(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
+			m_projectedRHS_mom_pre[2].setIdentity(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());
+
+			m_projectedRHS_mom[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			m_projectedRHS_mom[1].setZero(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
+			m_projectedRHS_mom[2].setZero(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());
+
+		}
+		else {
+			m_projectedRHS_mom_pre[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			m_projectedRHS_mom_pre[1].setZero(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
+			m_projectedRHS_mom_pre[2].setZero(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());
+
+			m_projectedRHS_mom[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			m_projectedRHS_mom[1].setZero(m_basesFunctions[1].cols(), m_basesFunctions[1].cols());
+			m_projectedRHS_mom[2].setZero(m_basesFunctions[2].cols(), m_basesFunctions[2].cols());
+
+#pragma omp parallel
+#pragma omp single nowait
+			{
+#pragma omp task
+				m_projectedRHS_mom_pre[0] = (m_basesFunctionsT[0] * m_massMatrix * m_basesFunctions[0]);
+#pragma omp task
+				m_projectedRHS_mom_pre[1] = (m_basesFunctionsT[1] * m_massMatrix * m_basesFunctions[1]);
+#pragma omp task
+				m_projectedRHS_mom_pre[2] = (m_basesFunctionsT[2] * m_massMatrix * m_basesFunctions[2]);
+			}
+		}
+
+#pragma omp parallel
+#pragma omp single nowait
+		{
+#pragma omp task
+			m_projectedRHS_mom[0] = m_projectedRHS_mom_pre[0] * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)
+#pragma omp task
+			m_projectedRHS_mom[1] = m_projectedRHS_mom_pre[1] * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)	
+#pragma omp task
+			m_projectedRHS_mom[2] = m_projectedRHS_mom_pre[2] * (1. / (m_timeStep * m_timeStep));    //m_rhsFirstTermMatrix = (U.T M U / h^2)	
+		}
+
+		if (m_projectedRHS_mom[0].hasNaN() || m_projectedRHS_mom[1].hasNaN() || m_projectedRHS_mom[2].hasNaN()) {
+			std::cout << "Warning: projected momentum RHS term has NaN values." << std::endl;
+		}
+
+		std::cout << "Projecting the momentum term LHS matrices to POD subspaces, for the global system ..." << std::endl;
+		PDMatrix eps(m_projectedLHS_mom[0].rows(), m_projectedLHS_mom[0].rows());
+		eps.setIdentity();
+		eps *= 1e-10;
+		//std::cout << "Projected the momentum term LHS matrices to POD subspaces, for the global system ..." << std::endl;
+
+		// Momentum term: m_subspaceLHS_mom = (U.T M U/h^2)
+		if (isPosSnapBasesOrtho) {  //in the orthogonal case: U.T M U = Identity
+
+			m_projectedLHS_mom[0].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			m_projectedLHS_mom[1].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			m_projectedLHS_mom[2].setIdentity(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+#pragma omp parallel
+#pragma omp single nowait
+			{
+#pragma omp task
+				m_projectedLHS_mom[0] *= (1. / (m_timeStep * m_timeStep));
+#pragma omp task
+				m_projectedLHS_mom[1] *= (1. / (m_timeStep * m_timeStep));
+#pragma omp task
+				m_projectedLHS_mom[2] *= (1. / (m_timeStep * m_timeStep));
+			}
+		}
+		else {
+#pragma omp parallel
+#pragma omp single nowait
+			{
+#pragma omp task
+				m_projectedLHS_mom[0] = m_basesFunctionsT[0] * m_lhsMatrix * m_basesFunctions[0];
+#pragma omp task
+				m_projectedLHS_mom[1] = m_basesFunctionsT[1] * m_lhsMatrix * m_basesFunctions[1];
+#pragma omp task
+				m_projectedLHS_mom[2] = m_basesFunctionsT[2] * m_lhsMatrix * m_basesFunctions[2];
+			}
+		}
+		//std::cout <<   m_projectedLHS_mom[0].rows() << " " <<   m_projectedLHS_mom[0].cols() << std::endl;
+		//std::cout<< "Projecting momentum terms has been done!.." << std::endl;
+
+		if (m_projectedLHS_mom[0].hasNaN() || m_projectedLHS_mom[1].hasNaN() || m_projectedLHS_mom[2].hasNaN()) {
+			std::cout << "Warning: projected momentum LHS term has NaN values." << std::endl;
+		}
+	}
+
+
+	// 2) Compute the constraint part of the global step
+	// If using rhs interpolation, let the constraint groups set up the constraint part of the LHS matrix
+	if (m_rhsInterpolation) {
+		std::cout << "Building and factorizing the complete LHS matrix... " << std::endl;
+
+		if (m_usingSkinSubspaces && !m_usePosSnapBases) {    /// Here we have Skinning positionSubspace reduction and rhdInterpolation
+			m_subspaceLHS_inner.setZero(m_baseFunctions.cols(), m_baseFunctions.cols());
+
+			if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_pos_and_constraint/";
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
+			}
+
+			std::cout << "Simulation case: Skinning subspaces for positions and LS Fitting for constraint projection" << std::endl;
+
+			// Projection terms for each snapshot group
+			for (auto& g : m_snapshotGroups) {
+				m_subspaceLHS_inner += g.getLHSMatrixSubspace(m_baseFunctions, m_baseFunctionsTransposed);
+				// m_subspaceLHS_inner = Sum_i U.T lambda_i S_i.T S_i U
+			}
+			// In case of flat bending, there is no bending constraint group but the bending terms
+			// still need to be added to the lhs
+			if (m_flatBending && !m_bendingConstraints.empty()) {
+				for (auto c : m_bendingConstraints) {
+					PDMatrix tmp = (m_baseFunctionsTransposed * c->getSelectionMatrixTransposed()) * (c->getSelectionMatrix() * m_baseFunctions);
+					tmp *= c->getWeight();
+					if (tmp.hasNaN()) {
+						std::cout << "Error while constructing lhs..." << std::endl;
+					}
+					m_subspaceLHS_inner += tmp;
+				}
+			}
+			// Additional constraints: we then add more terms to m_subspaceLHS_inner.
+			for (auto c : m_additionalConstraints) {
+				PDMatrix tmp = (m_baseFunctionsTransposed * c->getSelectionMatrixTransposed()) * (c->getSelectionMatrix() * m_baseFunctions);
+				tmp *= c->getWeight();
+				m_subspaceLHS_inner += tmp;
+			}
+
+			m_lhsMatrixSampled = m_subspaceLHS_mom + m_subspaceLHS_inner;    // m_lhsMatrixSampled = (1/ h^2) U.T M U + Sum_i U.T lambda_i S_i.T S_i U
+			m_denseSolver.compute(m_lhsMatrixSampled);                        // factorizing for the linear global solve
+			if (m_denseSolver.info() != Eigen::Success) {
+				std::cout << "Warning: Factorization denseSolver of LHS matrix for global system was not successful!.. make sure PROJ_DYN_SPARSIFY is set TRUE!" << std::endl;
+			}
+		}
+		else if (m_usePosSnapBases && !m_usingSkinSubspaces) {  /// Here we have POD positionSubspace and rhdInterpolation
+			m_projectedLHS_inner[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			m_projectedLHS_inner[1].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			m_projectedLHS_inner[2].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+
+
+			if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_LBS_constraint/";
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
+			}
+			std::cout << "Simulation case: POD subspaces for positions and LS Fitting for constraint projection" << std::endl;
+
+			PDSparseMatrix conMat(m_lhsMatrix.rows(), m_lhsMatrix.cols());
+			conMat.setZero();
+			std::vector<Eigen::Triplet<PDScalar>> entries;
+			for (auto& c : m_constraints) {
+				PDSparseMatrixRM& selMat = c->getSelectionMatrix();
+
+				for (int k = 0; k < selMat.outerSize(); ++k)
+					for (PDSparseMatrixRM::InnerIterator it(selMat, k); it; ++it)
+					{
+						for (PDSparseMatrixRM::InnerIterator it2(selMat, k); it2; ++it2)
+						{
+							entries.push_back(Eigen::Triplet<PDScalar>(it.col(), it2.col(), it.value() * it2.value() * c->getWeight()));
+						}
+					}
+			}
+			conMat.setFromTriplets(entries.begin(), entries.end());
+			//Additional constraints: we then add more terms to m_subspaceLHS_inner.
+			for (auto c : m_additionalConstraints) {
+				PDSparseMatrix tmp = (c->getSelectionMatrixTransposed()) * (c->getSelectionMatrix());
+				tmp *= c->getWeight();
+				conMat += tmp;
+			}
+
+#pragma omp parallel
+#pragma omp single nowait
+			{
+#pragma omp task
+				m_projectedLHS_inner[0] = m_basesFunctionsT[0] * conMat * m_basesFunctions[0];
+#pragma omp task
+				m_projectedLHS_inner[1] = m_basesFunctionsT[1] * conMat * m_basesFunctions[1];
+#pragma omp task
+				m_projectedLHS_inner[2] = m_basesFunctionsT[2] * conMat * m_basesFunctions[2];
+			}
+			if (m_projectedLHS_inner[0].hasNaN() || m_projectedLHS_inner[1].hasNaN() || m_projectedLHS_inner[2].hasNaN()) {
+				std::cout << "Error: projected constraints LHS term non-orthogonal has NaN values." << std::endl;
+			}
+#pragma omp parallel
+#pragma omp single nowait
+			{
+#pragma omp task
+				m_projectedlhsMatrix[0] = m_projectedLHS_mom[0] + m_projectedLHS_inner[0];   // U.T (M/h^2 )U  + U.T  lambda S.T S U
+#pragma omp task
+				m_projectedlhsMatrix[1] = m_projectedLHS_mom[1] + m_projectedLHS_inner[1];
+#pragma omp task
+				m_projectedlhsMatrix[2] = m_projectedLHS_mom[2] + m_projectedLHS_inner[2];
+			}
+			if (m_projectedlhsMatrix[0].hasNaN() || m_projectedlhsMatrix[1].hasNaN() || m_projectedlhsMatrix[2].hasNaN()) {
+				std::cout << "Error: projected LHS has NaN values." << std::endl;
+			}
+
+#pragma omp parallel
+#pragma omp single nowait
+			{
+#pragma omp task
+				m_denseXSolver.compute(m_projectedlhsMatrix[0]);
+#pragma omp task
+				m_denseYSolver.compute(m_projectedlhsMatrix[1]);
+#pragma omp task
+				m_denseZSolver.compute(m_projectedlhsMatrix[2]);
+			}
+			if (m_denseXSolver.info() != Eigen::Success || m_denseYSolver.info() != Eigen::Success || m_denseZSolver.info() != Eigen::Success) {
+				std::cout << "Warning: Factorization denseSolver X/Y/Z of LHS matrix for global system was not successful!.." << std::endl;
+			}
+			std::cout << "Factorization denseSolver X/Y/Z of LHS matrix for global system was successful!.." << std::endl;
+			//m_projectedLHS_inner[0] = m_subspaceLHS_inner.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF);					
+
+		}
+		else if (!m_usingPosSubspaces) {  // m_rhsInterpolation but no position space reduction
+
+			if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_constraint/";
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
+			}
+			std::cout << "Simulation case: No subspace reducgion for positions and LS Fitting for constraint projection" << std::endl;
+
+			PDSparseMatrix conMat(m_lhsMatrix.rows(), m_lhsMatrix.cols());
+
+			conMat.setZero();
+			std::vector<Eigen::Triplet<PDScalar>> entries;
+			for (auto& c : collectedConstraints) {
+				PDSparseMatrixRM& selMat = c->getSelectionMatrix();
+				for (int k = 0; k < selMat.outerSize(); ++k)
+					for (PDSparseMatrixRM::InnerIterator it(selMat, k); it; ++it)
+					{
+						for (PDSparseMatrixRM::InnerIterator it2(selMat, k); it2; ++it2)
+						{
+							entries.push_back(Eigen::Triplet<PDScalar>(it.col(), it2.col(), it.value() * it2.value() * c->getWeight()));
+						}
+					}
+			}
+			conMat.setFromTriplets(entries.begin(), entries.end());
+			//Additional constraints: we then add more terms to m_subspaceLHS_inner.
+			for (auto c : m_additionalConstraints) {
+				PDSparseMatrix tmp = (c->getSelectionMatrixTransposed()) * (c->getSelectionMatrix());
+				tmp *= c->getWeight();
+				conMat += tmp;
+			}
+
+			m_lhsMatrix += conMat;         // (M/h^2) + lambda S.T S
+			m_lhsMatrix.prune(0, 1e-9f);
+			int nnz = m_lhsMatrix.nonZeros();
+
+			// Factorize lhs matrix
+			StopWatch tmpWatch(10, 10);
+			tmpWatch.startStopWatch();
+			m_linearSolver.analyzePattern(m_lhsMatrix);
+			m_linearSolver.factorize(m_lhsMatrix);
+			tmpWatch.stopStopWatch();
+
+			std::cout << "Factorization of the system matrix took " << tmpWatch.lastMeasurement() << " microseconds." << std::endl;
+
+			if (m_linearSolver.info() != Eigen::Success) {   // I think this case should be included inside "else" above!
+				std::cout << "Warning: Factorization denseSolver of LHS matrix for global system was not successful!.. make sure PROJ_DYN_SPARSIFY is set TRUE!" << std::endl;
+			}
+
+		}
+
+	}
+	// In case constraint sampling / rhs interpolation is not used
+	// we set up the constraint part of the LHS matrix manually here
+	if (!m_rhsInterpolation) {
+		std::cout << "Building and factorizing the complete LHS matrix... " << std::endl;
+
+		PDSparseMatrix conMat(m_lhsMatrix.rows(), m_lhsMatrix.cols());
+		conMat.setZero();
+		std::vector<Eigen::Triplet<PDScalar>> entries;
+		for (auto& c : m_constraints) {
+			PDSparseMatrixRM& selMat = c->getSelectionMatrix();
+			for (int k = 0; k < selMat.outerSize(); ++k)
+				for (PDSparseMatrixRM::InnerIterator it(selMat, k); it; ++it)
+				{
+					for (PDSparseMatrixRM::InnerIterator it2(selMat, k); it2; ++it2)
+					{
+						entries.push_back(Eigen::Triplet<PDScalar>(it.col(), it2.col(), it.value() * it2.value() * c->getWeight()));
+					}
+				}
+		}
+
+		conMat.setFromTriplets(entries.begin(), entries.end());
+
+		if (m_usingSkinSubspaces && !m_usePosSnapBases) { // Slow case: using position subspaces but no rhs interpolation
+
+			if (STORE_FRAMES_OFF || STORE_CONSTRAINTPROJECTION_BIN) {
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "LBS_only_pos/";
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
+			}
+			std::cout << "Simulation case: Skinning subspace for positions and no reduction for constraint projection. VERY SLOW " << std::endl;
+			// (numeriacally unstable) REQUIRES EXTREMELY SMALL TIME STEP for reasonable visual simulations and becomes even SLOWWWWWWER!!" 
+
+			m_subspaceLHS_inner.setZero(m_baseFunctions.cols(), m_baseFunctions.cols());
+
+			std::cout << "Constraining it to the subspace..." << std::endl;
+
+			m_subspaceLHS_inner = m_baseFunctionsTransposed * conMat * m_baseFunctions;
+			m_lhsMatrixSampled = m_subspaceLHS_mom + m_subspaceLHS_inner;
+
+			m_denseSolver.compute(m_lhsMatrixSampled);  // 
+			std::cout << "Size of sampled, dense lhs mat: " << m_lhsMatrixSampled.rows() << ", " << m_lhsMatrixSampled.cols() << std::endl;
+		}
+		else if (m_usePosSnapBases && !m_usingSkinSubspaces) { // Slow case: using position subspaces but no rhs interpolation
+
+			if (STORE_FRAMES_OFF) {
+				if (m_usingQDEIMComponents) {
+					if (m_solveDeimLS) {
+						m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_LSDEIM_constraint/";
+
+						std::cout << "Simulation case: POD subspace for positions and DEIM/QDEIM for constraint projection, using Least square" << std::endl;
+					}
+					else {
+						m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_pos_and_DEIM_constraint/";
+						std::cout << "Simulation case: POD subspace for positions and DEIM/QDEIM for constraint projection" << std::endl;
+					}
+				}
+				else
+				{
+					std::cout << "Simulation case: POD subspace for positions and no reduction for constraint projection" << std::endl;
+					m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "PCA_only_pos/";
+				}
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
+			}
+			m_projectedLHS_inner[0].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			m_projectedLHS_inner[1].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+			m_projectedLHS_inner[2].setZero(m_basesFunctions[0].cols(), m_basesFunctions[0].cols());
+
+
+			std::cout << "Projecting the LHS matrices to the subspace..." << std::endl;
+
+			if (isPosSnapBasesOrtho) {  //in the orthogonal case: U.T M^-1 Sum lambda S.T S M^-1 U
+#pragma omp parallel
+#pragma omp single nowait
+				{
+#pragma omp task
+					m_projectedLHS_inner[0] = m_basesFunctionsT[0] * conMat * m_basesFunctions[0] * m_massMatrixInv;
+#pragma omp task
+					m_projectedLHS_inner[1] = m_basesFunctionsT[1] * conMat * m_basesFunctions[1] * m_massMatrixInv;
+#pragma omp task
+					m_projectedLHS_inner[2] = m_basesFunctionsT[2] * conMat * m_basesFunctions[2] * m_massMatrixInv;
+				}
+				if (m_projectedLHS_inner[0].hasNaN() || m_projectedLHS_inner[1].hasNaN() || m_projectedLHS_inner[2].hasNaN()) {
+					std::cout << "Error: projected constraints LHS term orthogonal has NaN values." << std::endl;
+				}
+			}
+			else {	 //in the non-orthogonal case: U.T Sum lambda S.T S U
+#pragma omp parallel
+#pragma omp single nowait
+				{
+#pragma omp task
+					m_projectedLHS_inner[0] = m_basesFunctionsT[0] * conMat * m_basesFunctions[0];
+#pragma omp task
+					m_projectedLHS_inner[1] = m_basesFunctionsT[1] * conMat * m_basesFunctions[1];
+#pragma omp task
+					m_projectedLHS_inner[2] = m_basesFunctionsT[2] * conMat * m_basesFunctions[2];
+				}
+				if (m_projectedLHS_inner[0].hasNaN() || m_projectedLHS_inner[1].hasNaN() || m_projectedLHS_inner[2].hasNaN()) {
+					std::cout << "Error: projected constraints LHS term non-orthogonal has NaN values." << std::endl;
+				}
+			}
+
+#pragma omp parallel
+#pragma omp single nowait
+			{
+#pragma omp task
+
+				m_projectedlhsMatrix[0] = m_projectedLHS_mom[0] + m_projectedLHS_inner[0];
+#pragma omp task
+				m_projectedlhsMatrix[1] = m_projectedLHS_mom[1] + m_projectedLHS_inner[1];
+#pragma omp task
+				m_projectedlhsMatrix[2] = m_projectedLHS_mom[2] + m_projectedLHS_inner[2];
+			}
+			if (m_projectedlhsMatrix[0].hasNaN() || m_projectedlhsMatrix[1].hasNaN() || m_projectedlhsMatrix[2].hasNaN()) {
+				std::cout << "Error: projected LHS has NaN values." << std::endl;
+			}
+
+#pragma omp parallel
+#pragma omp single nowait
+			{
+#pragma omp task
+				m_denseXSolver.compute(m_projectedlhsMatrix[0]);
+#pragma omp task
+				m_denseYSolver.compute(m_projectedlhsMatrix[1]);
+#pragma omp task
+				m_denseZSolver.compute(m_projectedlhsMatrix[2]);
+			}
+			if (m_denseXSolver.info() != Eigen::Success || m_denseYSolver.info() != Eigen::Success || m_denseZSolver.info() != Eigen::Success) {
+				std::cout << "Warning: Factorization denseSolver X/Y/Z of LHS matrix for global system was not successful!.." << std::endl;
+			}
+		}
+		else { // Full simulation: here neither position space nor constraint projection reduction ===> no reduction at all!!
+			if (STORE_FRAMES_OFF) {
+				m_meshSnapshotsDirectory = m_meshSnapshotsDirectory + "FOM/";
+				if (CreateDirectory(m_meshSnapshotsDirectory.c_str(), NULL) || ERROR_ALREADY_EXISTS == GetLastError())
+				{
+					std::cout << "Snapshots directory created!: " << m_meshSnapshotsDirectory << std::endl;
+				}
+			}
+			std::cout << "Simulation case: No REDUCTION: we run FullSpace positions and FullSpace constraint projection" << std::endl;
+
+			m_lhsMatrix += conMat;
+			m_lhsMatrix.prune(0, 1e-9f);
+			int nnz = m_lhsMatrix.nonZeros();
+
+			// Factorize lhs matrix
+			StopWatch tmpWatch(10, 10);
+			tmpWatch.startStopWatch();
+			m_linearSolver.analyzePattern(m_lhsMatrix);
+			m_linearSolver.factorize(m_lhsMatrix);
+			tmpWatch.stopStopWatch();
+
+			std::cout << "Factorization of the system matrix took " << tmpWatch.lastMeasurement() << " microseconds." << std::endl;
+
+			if (m_linearSolver.info() != Eigen::Success) {   // I think this case should be included inside "else" above!
+				std::cout << "Warning: Factorization denseSolver of LHS matrix for global system was not successful!.. make sure PROJ_DYN_SPARSIFY is set TRUE!" << std::endl;
+			}
+		}
+
+
+		// After the lhs has been constructed, if flat bending is desired,
+		// the bending constraints can now be thrown away! (?)
+		if (m_flatBending) {
+			for (ProjDynConstraint* c : m_bendingConstraints) {
+				auto const& bc = std::find(m_constraints.begin(), m_constraints.end(), c);
+				if (bc != m_constraints.end()) {
+					m_constraints.erase(bc);
+				}
+			}
+		}
+	}
+
+
+	m_recomputeFactorization = false;
+
+	// Now, all sampled constraints should have been added and the used vertices can be updated,
+	// and the constraints can be updated to use this list
+
+	/* note: rhsInterpolation uses a subset of the vertices used by skinning subspaces:
+	--> Therefore, in case rhsInterpolation we just updateUsedVertices,
+			in case m_usingSkinSubspaces we need to add the rest of the vertices from m_samples then updateUsedVertices,
+			while, otherwise in case of full simulations or POD subspaces we need all verties.
+			TODO: consider a list of vertices when using splocs zum beispiel!
+	*/
+	if (m_rhsInterpolation && m_usingSkinSubspaces && !m_usePosSnapBases) {
+		//std::cout << "Determining used vertices..." << std::endl;
+		updateUsedVertices();
+	}
+	else if (m_usingSkinSubspaces && !m_usePosSnapBases) {
+		for (unsigned int v : m_samples) {
+			m_additionalUsedVertices.push_back(v);
+		}
+		updateUsedVertices();
+	}
+	else if (m_rhsInterpolation && m_usePosSnapBases) {
+
+		for (unsigned int v : m_constraintVertexSamples) { // here we use only constraint samples
+			m_additionalUsedVertices.push_back(v);
+		}
+		/*
+		for (unsigned int v = 0; v < m_numVertices; v++) {
+			m_additionalUsedVertices.push_back(v);
+		}*/
+		updateUsedVertices();
+
+	}
+	else {
+		m_usedVertices.clear();
+		for (unsigned int v = 0; v < m_numVertices; v++) {
+			m_usedVertices.push_back(v);
+		}
+	}
+	//std::cout <<m_usedVertices.size() << std::endl;
+
+	// Optional sparsification of matrices
+	if (m_usingPosSubspaces && m_useSparseMatricesForSubspace) {
+		//std::cout << "PROJ_DYN_SPARSIFY is set TRUE.. Sparsifying the LHS complete matrix..." << std::endl;
+
+		if (m_usingSkinSubspaces && !m_usePosSnapBases) {
+			PDSparseMatrix lhsMatrixSampledSparse = m_lhsMatrixSampled.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
+			m_subspaceSystemSolverSparse.compute(lhsMatrixSampledSparse);
+			if (m_subspaceSystemSolverSparse.info() != Eigen::Success) {
+				std::cout << "Warning: Factorization of the sparse LHS matrix for the global step was not successful!" << std::endl;
+				PDSparseMatrix eps(lhsMatrixSampledSparse.rows(), lhsMatrixSampledSparse.rows());
+				eps.setIdentity();
+				eps *= 1e-12;
+				while (m_subspaceSystemSolverSparse.info() != Eigen::Success && eps.coeff(0, 0) < 1e-10) {
+					std::cout << "Adding small diagonal entries (" << eps.coeff(0, 0) << ")..." << std::endl;
+					lhsMatrixSampledSparse += eps;
+					eps *= 2;
+					m_subspaceSystemSolverSparse.compute(eps);
+				}
+			}
+			else {
+				std::cout << "Factorization of the sparse LHS matrix for the global step was successful!" << std::endl;
+			}
+			m_rhsFirstTermMatrixSparse = m_rhsFirstTermMatrix.sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
+			updateParallelVUpdateBlocks();
+
+		}
+
+		if (m_usePosSnapBases && !m_usingSkinSubspaces) {
+			PDSparseMatrix lhsXMatrixSampledSparse = m_projectedlhsMatrix[0].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
+			PDSparseMatrix lhsYMatrixSampledSparse = m_projectedlhsMatrix[1].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
+			PDSparseMatrix lhsZMatrixSampledSparse = m_projectedlhsMatrix[2].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
+
+#pragma omp parallel
+#pragma omp single nowait
+			{
+#pragma omp task
+				m_subspaceXSystemSolverSparse.compute(m_projectedlhsMatrixSparse[0]);
+#pragma omp task
+				m_subspaceYSystemSolverSparse.compute(lhsYMatrixSampledSparse);
+#pragma omp task
+				m_subspaceZSystemSolverSparse.compute(lhsZMatrixSampledSparse);
+			}
+
+			if (m_subspaceXSystemSolverSparse.info() != Eigen::Success) {
+				std::cout << "Warning: Factorization of the sparse X LHS matrix for the global step was not successful!" << std::endl;
+				PDSparseMatrix eps(m_projectedlhsMatrixSparse[0].rows(), m_projectedlhsMatrixSparse[0].rows());
+				eps.setIdentity();
+				eps *= 1e-12;
+				while (m_subspaceXSystemSolverSparse.info() != Eigen::Success && eps.coeff(0, 0) < 1e-10) {
+					std::cout << "Adding small diagonal entries (" << eps.coeff(0, 0) << ")..." << std::endl;
+					m_projectedlhsMatrixSparse[0] += eps;
+					eps *= 2;
+					m_subspaceXSystemSolverSparse.compute(m_projectedlhsMatrixSparse[0]);
+				}
+			}
+			else if (m_subspaceYSystemSolverSparse.info() != Eigen::Success) {
+				std::cout << "Warning: Factorization of the sparse Y LHS matrix for the global step was not successful!" << std::endl;
+				PDSparseMatrix eps(lhsYMatrixSampledSparse.rows(), lhsYMatrixSampledSparse.rows());
+				eps.setIdentity();
+				eps *= 1e-12;
+				while (m_subspaceYSystemSolverSparse.info() != Eigen::Success && eps.coeff(0, 0) < 1e-10) {
+					std::cout << "Adding small diagonal entries (" << eps.coeff(0, 0) << ")..." << std::endl;
+					lhsYMatrixSampledSparse += eps;
+					eps *= 2;
+					m_subspaceYSystemSolverSparse.compute(lhsYMatrixSampledSparse);
+				}
+			}
+			else if (m_subspaceZSystemSolverSparse.info() != Eigen::Success) {
+				std::cout << "Warning: Factorization of the sparse Z LHS matrix for the global step was not successful!" << std::endl;
+				PDSparseMatrix eps(lhsZMatrixSampledSparse.rows(), lhsZMatrixSampledSparse.rows());
+				eps.setIdentity();
+				eps *= 1e-12;
+				while (m_subspaceZSystemSolverSparse.info() != Eigen::Success && eps.coeff(0, 0) < 1e-10) {
+					std::cout << "Adding small diagonal entries (" << eps.coeff(0, 0) << ")..." << std::endl;
+					lhsZMatrixSampledSparse += eps;
+					eps *= 2;
+					m_subspaceZSystemSolverSparse.compute(lhsZMatrixSampledSparse);
+				}
+
+			}
+			else {
+				std::cout << "Factorization of the sparse LHS matrix for the global step was successful!" << std::endl;
+			}
+			m_projectedRHS_momSparse[0] = m_projectedRHS_mom[0].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);  // Only momentum term of RHS
+			m_projectedRHS_momSparse[1] = m_projectedRHS_mom[1].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
+			m_projectedRHS_momSparse[2] = m_projectedRHS_mom[2].sparseView(0, PROJ_DYN_SPARSITY_CUTOFF_HIGH_PREC);
+			std::cout << "First RHS term has been also sparsified.." << std::endl;
+			//updateParallelVUpdateBlocks();/// TODO :make sure this update is aware of the pod case first before using it
+
+		}
+
+	}
+
+	m_collidedVerts = new bool[m_numVertices];
+
+	for (int i = 0; i < m_numVertices; i++) m_collidedVerts[i] = false;
+
+	m_isSetup = true;
+	m_collisionCorrection = false;
+	//m_planeBounceCorrection = false;
+	m_grippedVertices.clear();
+
+	m_initialPos = m_positions;
+	m_initialPosSub = m_positionsSubspace;
+
+	// Precompute the weighted external forces that will appear on the rhs
+	recomputeWeightedForces();
+
+	m_precomputationStopWatch.stopStopWatch();
+
+
+
+	if (m_usingQDEIMComponents && !m_solveDeimLS) {	// TODO: parallelize!
+
+		/*
+		UTSTx.resize(usedConstraints->size()), UTSTy.resize(usedConstraints->size()), UTSTz.resize(usedConstraints->size());
+		for (int ind = 0; ind < usedConstraints->size(); ind++) {  // usedConstraints->size() = numConstraints * ConstraintsSize ==e*p
+
+			PDSparseMatrix ST;    // selection.T matrices
+			ST = usedConstraints->at(ind)->getSelectionMatrixTransposed();   // (numVertices, p)
+
+			// e-times
+			UTSTx[ind] = basesFunctionsTSparse[0] * ST;    // each size (r_pod , p)
+			UTSTy[ind] = basesFunctionsTSparse[1] * ST;
+			UTSTz[ind] = basesFunctionsTSparse[2] * ST;
+
+			//std::cout << ST.innerSize() << " " << ST.outerSize()<< " " << usedConstraints->size() << std::endl;
+
+			p_constaintSize = ST.outerSize();
+
+		}
+
+		*/
+		int p = 1;   // constraint size
+		if (m_TetStrainOnly) {
+			p = 3;
+		}
+		std::cout << "Preparing QDEIM RHS matrices ...";
+		UTSTMx.setZero(m_numPosPODModes + 1, deimBasisCols), UTSTMy.setZero(m_numPosPODModes + 1, deimBasisCols), UTSTMz.setZero(m_numPosPODModes + 1, deimBasisCols);
+		STMx.setZero(m_numVertices, deimBasisCols), STMy.setZero(m_numVertices, deimBasisCols), STMz.setZero(m_numVertices, deimBasisCols);
+		for (int ind = 0; ind < usedConstraints->size(); ind++) {
+			//int p = p_constaintSize;
+			PDMatrix bx, by, bz;
+			bx = m_xMqdeim.block(ind * p, 0, p, deimBasisCols);  // (p, deimBasisCols) // TODO: sparcify M (?)
+			by = m_yMqdeim.block(ind * p, 0, p, deimBasisCols);
+			bz = m_zMqdeim.block(ind * p, 0, p, deimBasisCols);
+
+			PDSparseMatrix ST_ind = usedConstraints->at(ind)->getSelectionMatrixTransposed();   // (numVertices, p)
+			PDScalar weight_ind = usedConstraints->at(ind)->getWeight();
+			for (int k = 0; k < deimBasisCols; k++) {
+				/*
+				fastDensePlusSparseTimesDenseMat(UTSTMx, UTSTx[ind] , bx, k);  // size (r_pod , kp) dense matrix
+				fastDensePlusSparseTimesDenseMat(UTSTMy, UTSTy[ind] , by, k);
+				fastDensePlusSparseTimesDenseMat(UTSTMz, UTSTz[ind] , bz, k);
+
+				*/
+
+				fastDensePlusSparseTimesDenseMat(STMx, ST_ind, bx, k, weight_ind); // (n, deimBasisCols)
+				fastDensePlusSparseTimesDenseMat(STMy, ST_ind, by, k, weight_ind);
+				fastDensePlusSparseTimesDenseMat(STMz, ST_ind, bz, k, weight_ind);
+			}
+		}
+
+		UTSTMx = m_basesFunctionsTSparse[0] * STMx;    // (r_pod, deimBasisCols)
+		UTSTMy = m_basesFunctionsTSparse[1] * STMy;
+		UTSTMz = m_basesFunctionsTSparse[2] * STMz;
+
+		std::cout << " done." << std::endl;
+	}
+
+#ifndef EIGEN_DONT_PARALLELIZE
+	Eigen::setNbThreads(PROJ_DYN_EIGEN_NUM_THREADS);
+#endif
+	//std::cout << m_velocitiesSubspace << std::endl;
+}
 void ProjDynSimulator::step(int numIterations)
 {
 	

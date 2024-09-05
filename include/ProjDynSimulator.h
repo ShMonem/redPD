@@ -88,6 +88,11 @@ SOFTWARE.
 
 #define SNAPBASES_POSITION_SPARSE "_nonSparse"
 
+#define SNAPBASES_CONSPROJ_ALIGNMENT "_noAlignement"
+#define SNAPBASES_CONSPROJ_WEIGHTING "_Volkwein_Standarized"
+#define SNAPBASES_CONSPROJ_SUPPORT "_Local"
+#define SNAPBASES_CONSPROJ_ORTHOGONAL "_nonOrthogonalized"
+
 namespace PD {
 
 #ifndef PROJ_DYN_USE_CHOLMOD
@@ -134,6 +139,9 @@ namespace PD {
 			std::string pca_directory = "",
 			int numSPLOCSComponents = -1,
 			std::string splocs_directory = "",
+			int numDEIMComponents = -1,
+			std::string deim_directory = "",
+			std::string deim_directory_extend = "",
 			int numLBSPosSamples = -1, 
 			PDScalar baseFunctionRadius = 2.5,
 			int interpolBaseSize = 120,
@@ -385,6 +393,7 @@ namespace PD {
 		bool m_usingPODPosSubspaces = false;
 		bool m_usingSPLOCSPosSubspaces = false;
 		bool m_usePosSnapBases = false;
+
 		int m_numPosPODModes = 0;
 		int m_numPosSPLOCSModes = 0;
 		int m_numPosSnapBasesModes = 0;
@@ -422,8 +431,6 @@ namespace PD {
 		Eigen::LLT<PDMatrix> m_subspaceYSolver;
 		Eigen::LLT<PDMatrix> m_subspaceZSolver;
 		
-		// std::vector<PDSparseSolver> m_projectToSnapBasesSparseSolver{};
-
 		PDSparseSolver m_subspaceXSparseSolver;
 		PDSparseSolver m_subspaceYSparseSolver;
 		PDSparseSolver m_subspaceZSparseSolver;
@@ -467,12 +474,10 @@ namespace PD {
 		
 		PDPositions m_PODpositionCorrections;
 		// for random plane collision
-		void resolvePlaneCollisopn(unsigned int v, PDPositions & pos, PDPositions & posCorrect);
+		//void resolvePlaneCollisopn(unsigned int v, PDPositions & pos, PDPositions & posCorrect);
 		//void addRandomFloor(PDScalar a, PDScalar b, PDScalar c, PDScalar d, PDScalar floorCollisionWeight);
 		PDScalar coeffX, coeffY, coeffZ, planeScalar;
 		bool m_planeBounceCorrection;
-		
-		
 		bool podUsedVerticesOnly = false;
 		
 		PDMatrix m_usedVertexXInterpolatorRHSMatrix;

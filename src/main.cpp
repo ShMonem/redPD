@@ -57,6 +57,7 @@ ProjDynSimulator *initSimulator(PD::PDPositions verts, PD::PDTriangles faces, PD
 								double timeStep,
 								int numberPositionPCAModes, std::string pca_basesDir,
 								int numberNonlinearSPLOCSModes, std::string splocs_basesDir,
+								int numberNonlinearDEIMModes, std::string deim_basesDir, std::string deim_basesDir_extend,
 								int numberSamplesForVertexPosSubspace,
 
 								double radiusMultiplierForVertexPosSubspace,
@@ -73,7 +74,9 @@ ProjDynSimulator *initSimulator(PD::PDPositions verts, PD::PDTriangles faces, PD
 	// allocate memory for a simulator object
 	ProjDynSimulator *sim =
 		new ProjDynSimulator(faces, verts, velos, timeStep, 
-							 numberPositionPCAModes, pca_basesDir, numberNonlinearSPLOCSModes, splocs_basesDir,
+							 numberPositionPCAModes, pca_basesDir,
+							 numberNonlinearSPLOCSModes, splocs_basesDir,
+							 numberNonlinearDEIMModes, deim_basesDir, deim_basesDir_extend,
 							 numberSamplesForVertexPosSubspace, radiusMultiplierForVertexPosSubspace,
 							 dimensionOfConstraintProjectionsSubspace, radiusMultiplierForConstraintProjectionsSubspace,
 							 numberSampledConstraints,
@@ -132,6 +135,11 @@ public:
 	std::string m_pca_basesDir;
 	int m_numberPositionSPLOCSModes;
 	std::string m_splocs_basesDir;
+
+	int m_numberNonlinearDEIMModes;
+	std::string m_deim_basesDir;
+	std::string m_deim_basesDir_extend;
+
 	int m_numberSamplesForLBSVertexPosSubspace;
 	double m_radiusMultiplierForVertexPosSubspace;
 	int m_dimensionOfConstraintProjectionsSubspace;
@@ -148,6 +156,7 @@ public:
 		int numIterations, double timeStep,
 		int numberPositionPCAModes, std::string pca_directory,
 		int numberPositionSPLOCSModes, std::string splocs_basesDir,
+		int numberNonlinearDEIMModes, std::string deim_basesDir, std::string deim_basesDir_extend,
 		int numberSamplesForVertexPosSubspace,
 		double radiusMultiplierForVertexPosSubspace,
 		int dimensionOfConstraintProjectionsSubspace,
@@ -168,9 +177,13 @@ public:
 		m_png_frames_directory(frames_directory),
 		m_pca_basesDir(pca_directory),
 		m_splocs_basesDir(splocs_basesDir),
+		m_deim_basesDir(deim_basesDir),
+		m_deim_basesDir_extend(deim_basesDir_extend),
 		m_timeStep(timeStep),
 		m_numberPositionPCAModes(numberPositionPCAModes),
 		m_numberPositionSPLOCSModes(numberPositionSPLOCSModes),
+		m_numberNonlinearDEIMModes(numberNonlinearDEIMModes),
+
 		m_numberSamplesForLBSVertexPosSubspace(numberSamplesForVertexPosSubspace),
 		m_radiusMultiplierForVertexPosSubspace(radiusMultiplierForVertexPosSubspace),
 		m_dimensionOfConstraintProjectionsSubspace(dimensionOfConstraintProjectionsSubspace),
@@ -186,6 +199,7 @@ public:
 		m_sim = initSimulator(m_verts, m_faces, m_velos, m_url, m_timeStep,
 			m_numberPositionPCAModes, m_pca_basesDir,
 			m_numberPositionSPLOCSModes, m_splocs_basesDir,
+			m_numberNonlinearDEIMModes, m_deim_basesDir, m_deim_basesDir_extend,
 			m_numberSamplesForLBSVertexPosSubspace,
 			m_radiusMultiplierForVertexPosSubspace,
 			m_dimensionOfConstraintProjectionsSubspace,
@@ -351,6 +365,7 @@ public:
 				m_sim = initSimulator(m_verts, m_faces, m_velos, m_url, m_timeStep,
 					m_numberPositionPCAModes, m_pca_basesDir,
 					m_numberPositionSPLOCSModes, m_splocs_basesDir,
+					m_numberNonlinearDEIMModes, m_deim_basesDir, m_deim_basesDir_extend,
 					m_numberSamplesForLBSVertexPosSubspace,
 					m_radiusMultiplierForVertexPosSubspace,
 					m_dimensionOfConstraintProjectionsSubspace,
@@ -411,7 +426,12 @@ int main()
 								SNAPBASES_POSITION_SUPPORT + SNAPBASES_POSITION_ORTHOGONAL + "_Release/200outOf200_Frames_/1_increment_200" + SNAPBASES_POSITION_ALIGNMENT + "_bases/using_F_200";
 	std::string splocs_basesDir = "../../../bases/" + meshName + "/_gravitationalFall/q_bases/SPLOCS" + SNAPBASES_POSITION_ALIGNMENT + SNAPBASES_POSITION_WEIGHTING +
 		SNAPBASES_POSITION_SUPPORT + SNAPBASES_POSITION_ORTHOGONAL + "_Release/200outOf200_Frames_/1_increment_200" + SNAPBASES_POSITION_ALIGNMENT + "_bases/using_F_200";
-	std::string deim_basesDir;
+
+	
+	std::string deim_basesDir = "../../../bases/" + meshName + "/_gravitationalFall/p_bases/" + SNAPBASES_CONSPROJ_ALIGNMENT;
+		
+	std::string deim_basesDir_extend  = std::string("deim") + SNAPBASES_CONSPROJ_ALIGNMENT + SNAPBASES_CONSPROJ_WEIGHTING + SNAPBASES_CONSPROJ_SUPPORT +
+									SNAPBASES_CONSPROJ_ORTHOGONAL + "_Testing/100outOf100_Frames_/1_increment_100" + SNAPBASES_CONSPROJ_ALIGNMENT + "_bases/pl_nl_F100";
 
 	//  Load a mesh using IGL
 	PD::PDPositions velos;
@@ -459,13 +479,13 @@ int main()
 		// LBS reduction parameters
 		// 
 		// 1. For position subspace
-		int numberSamplesForLBSVertexPosSubspace = 0;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
+		int numberSamplesForLBSVertexPosSubspace = 20;              // 200; // The number of degrees of freedom for the mesh vertex positions will be 12 times that
 		double radiusMultiplierForVertexPosSubspace = 1.1;      // The larger this number, the larger the support of the base functions.
 		
 		// 2. For constraints subspace
-		int dimensionOfConstraintProjectionsSubspace = 0;       // 120; // The constraint projections subspace will be constructed to be twice that size and then condensed via an SVD
+		int dimensionOfConstraintProjectionsSubspace = 120;       // 120; // The constraint projections subspace will be constructed to be twice that size and then condensed via an SVD
 		double radiusMultiplierForConstraintProjectionsSubspace = 2.2;     
-		int numberSampledConstraints = 0;                      // 1000; // Number of constraints that will be evaluated each iteration
+		int numberSampledConstraints = 1000;                      // 1000; // Number of constraints that will be evaluated each iteration
 		                                                       //  this number needs to be zero in order to do no reduction for constraint projection
 		double massPerUnitArea = 2.;
 		double dampingAlpha = 0;
@@ -528,6 +548,7 @@ int main()
 		SimViewer simViewer(verts, faces, velos, meshName, m_png_frames_directory, numIterations, timeStep,
 			                numberPositionPCAModes, pca_basesDir,
 							numberPositionSPLOCSModes, splocs_basesDir,
+							numberNonlinearDEIMModes, deim_basesDir, deim_basesDir_extend,
 							numberSamplesForLBSVertexPosSubspace,
 							radiusMultiplierForVertexPosSubspace,
 							dimensionOfConstraintProjectionsSubspace,
